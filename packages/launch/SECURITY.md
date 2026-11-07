@@ -2,8 +2,8 @@
 
 ## Signaler une faille / Reporting a vulnerability
 
-Merci de **ne pas** ouvrir de ticket public. Écrivez en privé aux mainteneurs du dépôt (onglet « Security » →
-« Report a vulnerability » sur GitHub). Aucun délai de réponse n'est garanti : ce projet est fourni tel quel.
+Merci de **ne pas** ouvrir de ticket public. Écrivez en privé aux mainteneurs (adresse de contact ajoutée lors de la
+publication du dépôt ; sur GitHub : onglet « Security » → « Report a vulnerability »). Aucun délai de réponse n'est garanti : ce projet est fourni tel quel.
 
 Please do **not** open a public issue. Use GitHub's private vulnerability reporting. No response time is guaranteed.
 
@@ -17,8 +17,8 @@ Please do **not** open a public issue. Use GitHub's private vulnerability report
 | Commande détournée | Java est lancé avec une liste d'arguments (`shell: false`). Les options Java venant des fichiers téléchargés passent par une **liste blanche** : tout ce qui n'est pas connu est ignoré (par exemple `-javaagent`, `@fichier`, `-XX:On…`, `-Dminecraft.api.*.host`, `-Dlog4j.configurationFile` distant). La configuration des journaux de Mojang est toujours appliquée en dernier. Le jeton n'est jamais placé dans les options Java. |
 | Lien qui sort du dossier Java | Les liens du runtime Mojang ne sont créés que s'ils restent dans son dossier et visent un vrai fichier. |
 | Expression piégée (ReDoS) | Les règles « os.version » ne sont évaluées que si elles sont simples (64 caractères au plus). |
-| Fichier local abîmé ou remplacé | Avant chaque lancement : empreinte complète du jeu, des bibliothèques et des fichiers essentiels de Java (exécutable, bibliothèques natives, modules), sauf `fastLaunch`. Les fichiers produits par l'installeur d'un chargeur sans empreinte publiée sont contrôlés par leur taille. |
-| Fuite du jeton | Masqué dans tous les journaux, jamais renvoyé par l'API, absent de `console.log(jeu)` et des erreurs. `exporterJournal()` retire aussi le pseudo, l'UUID et le dossier personnel. |
+| Fichier local abîmé ou remplacé | Avant chaque lancement : empreinte complète du jeu, des bibliothèques et de tous les fichiers du Java automatique (sauf la documentation), sauf `fastLaunch`. Les fichiers produits par l'installeur d'un chargeur sans empreinte publiée sont contrôlés par leur taille. |
+| Fuite du jeton | Masqué dans tous les journaux et dans `jeu.command`, absent de `console.log(jeu)` et des erreurs, jamais dans `account`. Exception voulue : `buildArgs()` (outil avancé) le contient dans `args`/`secrets` — à ne jamais journaliser. `exporterJournal()` retire aussi le pseudo, l'UUID et le dossier personnel. |
 
 ## Limites connues (à connaître)
 

@@ -218,7 +218,8 @@ async function checkReady(plan, opts) {
   for (const l of plan.libraries) if (l.classpath || l.native) wanted.add(path.resolve(l.path));
   if (plan.java.auto) {
     wanted.add(path.resolve(plan.java.executable));
-    for (const f of plan.java.runtime ? plan.java.runtime.files : []) if (/[\\/]lib[\\/][^\\/]*\.(so|dll|dylib|jsa)$|[\\/]modules$/.test(f.path)) wanted.add(path.resolve(f.path));
+    // Tout le Java automatique (bin, lib, conf…), sauf la documentation : empreintes en cache, rapide après le 1er lancement.
+    for (const f of plan.java.runtime ? plan.java.runtime.files : []) if (!/[\\/](legal|man|docs?)[\\/]/.test(f.path)) wanted.add(path.resolve(f.path));
   }
   if (plan.copyJar) byPath.set(path.resolve(plan.copyJar.to), { path: plan.copyJar.to, sha1: plan.copyJar.sha1, size: plan.copyJar.size });
   for (const g of plan.generated || []) byPath.set(path.resolve(g.path), g);
