@@ -302,3 +302,21 @@ test('journal exporté : xuid et identifiant client retirés aussi', () => {
   const t = anonymize('--xuid 2535412345678901 --clientId abcdclientid', { xuid: '2535412345678901', clientId: 'abcdclientid' });
   assert.ok(!t.includes('2535412345678901') && !t.includes('abcdclientid'));
 });
+
+test('liste blanche : AUCUNE option Java réelle (Mojang 1.13→26.x, Fabric, Quilt, Forge, NeoForge) n\'est refusée', () => {
+  const real = require('../fixtures/real-jvm-args.json');
+  for (const [id, a] of Object.entries(real)) {
+    const r = buildArgs(plan({ id, mainClass: 'M', arguments: { ...a, game: [] } }), {});
+    assert.deepEqual(r.ignored, [], id);
+  }
+});
+
+test('liste blanche : valeurs piégées refusées (classpath, module-path, chemins des natives, fabric.*)', () => {
+  const jvm = ['-cp', '\\\\evil\\share\\payload.jar', '-p', '/tmp/x', '--add-modules', 'ALL-MODULE-PATH',
+    '-Djava.library.path=\\\\evil\\share', '-Dorg.lwjgl.librarypath=/tmp/attacker', '-Djava.library.path=${natives_directory}/../../x',
+    '-Dfabric.gameJarPath=/tmp/evil.jar', '-DlibraryDirectory=\\\\evil\\libs', '-Dfml.x=/etc/passwd'];
+  const r = buildArgs(plan({ id: 'x', mainClass: 'M', arguments: { jvm, game: [] } }), {});
+  const j = r.args.join(' ');
+  for (const bad of ['evil', '/tmp/', 'attacker', 'passwd', '..']) assert.ok(!j.includes(bad), bad);
+  assert.ok(r.args.includes('ALL-MODULE-PATH'));
+});

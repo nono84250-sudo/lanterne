@@ -71,17 +71,40 @@ function substitute(arg, vars) {
  * -Dlog4j.configurationFile=https://… (journal piégé).
  * Les options données par l'appelant (opts.jvmArgs) ne passent pas par ce filtre.
  */
-const JVM_FLAGS_WITH_VALUE = new Set(['-cp', '-classpath', '--class-path', '-p', '--module-path', '--add-modules', '--add-opens', '--add-exports', '--add-reads', '--enable-native-access']);
+// Options suivies d'une valeur : la valeur est contrôlée elle aussi.
+const NAME_LIST = /^[A-Za-z0-9_.\/=,-]+$/; // modules et paquets (java.base/java.util.jar=cpw.mods.x)
+const libPathList = (v) => v.split('${classpath_separator}').every((p) => /^\$\{library_directory\}\/[A-Za-z0-9_.+\/-]+$/.test(p) && !p.includes('..'));
+const JVM_FLAGS_WITH_VALUE = new Map([
+  ['-cp', (v) => v === '${classpath}'], ['-classpath', (v) => v === '${classpath}'], ['--class-path', (v) => v === '${classpath}'],
+  ['-p', libPathList], ['--module-path', libPathList],
+  ['--add-modules', (v) => NAME_LIST.test(v) && !v.includes('..')], ['--add-opens', (v) => NAME_LIST.test(v) && !v.includes('..')],
+  ['--add-exports', (v) => NAME_LIST.test(v) && !v.includes('..')], ['--add-reads', (v) => NAME_LIST.test(v) && !v.includes('..')],
+  ['--enable-native-access', (v) => /^[\w.,-]+$/.test(v)],
+]);
+const SAFE_VALUE = /^[A-Za-z0-9_.,:${}+-]*$/; // pas de / ni de \ : aucun chemin choisi par le JSON
+const NATIVES = /^\$\{natives_directory\}(?:\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*$/; // 26.x : ${natives_directory}/lwjgl…
 const JVM_ALLOWED = [
   /^-X(?:ss|ms|mx|mn)\d+[kKmMgG]?$/,
   /^-XstartOnFirstThread$/,
   /^-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw\.exe_minecraft\.exe\.heapdump$/,
-  /^-XX:[+-](?:UnlockExperimentalVMOptions|Use(?:G1|Z|Shenandoah|Parallel|Serial)GC|ZGenerational|UseCompactObjectHeaders|UseStringDeduplication|AlwaysPreTouch|ParallelRefProcEnabled|DisableExplicitGC|PerfDisableSharedMem)$/,
+  /^-XX:[+-](?:UnlockExperimentalVMOptions|IgnoreUnrecognizedVMOptions|Use(?:G1|Z|Shenandoah|Parallel|Serial)GC|ZGenerational|UseCompactObjectHeaders|UseStringDeduplication|AlwaysPreTouch|ParallelRefProcEnabled|DisableExplicitGC|PerfDisableSharedMem)$/,
   /^-XX:(?:G1[A-Za-z]+|MaxGCPauseMillis|StackShadowPages|ParallelGCThreads|ConcGCThreads|MaxTenuringThreshold|SurvivorRatio|InitiatingHeapOccupancyPercent)=\d+[kKmMgG%]?$/,
-  /^-D(?:java\.library\.path|jna\.tmpdir|org\.lwjgl\.[\w.]+|io\.netty\.[\w.]+|minecraft\.launcher\.(?:brand|version)|os\.(?:name|version)|FabricMcEmu|ignoreList|libraryDirectory|mergeModules|fml\.[\w.]+|forge\.[\w.]+|neoforge\.[\w.]+|java\.net\.preferIPv[46]\w*|file\.encoding|std(?:out|err)\.encoding|sun\.(?:stdout|stderr)\.encoding|log4j2\.formatMsgNoLookups|java\.awt\.headless)=/,
-  /^-D(?:fabric|loader|quilt)\.(?!addMods|loadMods|mods)[\w.]+=/,
+  /^-DFabricMcEmu=\s*[A-Za-z0-9_.$]+\s*$/,
+  /^-DlibraryDirectory=\$\{library_directory\}$/,
   /^--enable-native-access=[\w.,-]+$/,
+  /^--add-(?:exports|opens|reads|modules)=[A-Za-z0-9_.\/=,-]+$/,
 ];
+// -Dclé=valeur : chemins seulement vers le dossier des natives, sinon valeur simple sans chemin.
+const JVM_PROPS = [
+  [/^(?:java\.library\.path|jna\.tmpdir|org\.lwjgl\.system\.SharedLibraryExtractPath|io\.netty\.native\.workdir|org\.lwjgl\.librarypath)$/, (v) => NATIVES.test(v)],
+  [/^(?:minecraft\.launcher\.(?:brand|version)|os\.(?:name|version)|ignoreList|mergeModules|fml\.[\w.]+|forge\.[\w.]+|neoforge\.[\w.]+|java\.net\.preferIPv[46]\w*|file\.encoding|std(?:out|err)\.encoding|sun\.(?:stdout|stderr)\.encoding|log4j2\.formatMsgNoLookups|java\.awt\.headless|org\.lwjgl\.util\.[\w.]+)$/,
+    (v) => SAFE_VALUE.test(v) || /^[A-Za-z0-9 ._-]+$/.test(v)],
+];
+function propAllowed(a) {
+  const m = /^-D([^=]+)=(.*)$/s.exec(a);
+  if (!m) return false;
+  return JVM_PROPS.some(([k, ok]) => k.test(m[1]) && ok(m[2]));
+}
 const LOG_CONFIG_ARG = /^-Dlog4j2?\.configurationFile=\$\{path\}$/;
 const SECRET_VAR = /\$\{(?:auth_[a-z_]+|user_properties|clientid)\}/i;
 
@@ -97,11 +120,12 @@ function filterJsonJvm(list, ignored) {
     if (!okString(a)) { ignored.push(String(a)); continue; }
     if (JVM_FLAGS_WITH_VALUE.has(a)) {
       const val = list[i + 1];
-      if (typeof val === 'string' && okString(val) && !val.startsWith('-') && !val.startsWith('@')) { out.push(a, val); i++; }
-      else ignored.push(a);
+      if (typeof val === 'string' && okString(val) && JVM_FLAGS_WITH_VALUE.get(a)(val)) out.push(a, val);
+      else ignored.push(`${a} ${typeof val === 'string' ? val : ''}`.trim());
+      i++; // la valeur est consommée dans tous les cas
       continue;
     }
-    if (JVM_ALLOWED.some((re) => re.test(a))) out.push(a);
+    if (JVM_ALLOWED.some((re) => re.test(a)) || propAllowed(a)) out.push(a);
     else ignored.push(a);
   }
   return out;

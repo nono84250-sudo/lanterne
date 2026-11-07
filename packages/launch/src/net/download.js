@@ -172,8 +172,14 @@ async function downloadOnce(file, opts = {}) {
       if (err instanceof LaunchError) throw err;
       throw r.mapError(err);
     }
-    try { await fh.close(); } catch (err) { throw fromSystemError(err, part); }
+    let mine;
+    try { mine = await fh.stat(); await fh.close(); } catch (err) { throw fromSystemError(err, part); }
     fh = null;
+    // Un autre programme a-t-il touché à ce .part pendant ce temps (même dossier partagé) ?
+    const now = await fsp.lstat(part).catch(() => null);
+    if (!now || !now.isFile() || now.ino !== mine.ino || now.size !== written) {
+      throw new LaunchError('NETWORK', `${path.basename(part)} modifié par un autre programme, nouvel essai`, { file: file.path });
+    }
 
     if (expectedSize !== null && written !== expectedSize) {
       if (written > expectedSize) await fsp.rm(part, { force: true }).catch(() => {});

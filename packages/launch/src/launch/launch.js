@@ -88,7 +88,8 @@ class GameProcess extends EventEmitter {
       // Sous Windows, kill() force l'arrêt tout de suite : on demande d'abord la fermeture
       // de la fenêtre (comme cliquer sur la croix), pour que le monde soit sauvegardé.
       try {
-        const tk = spawn('taskkill', ['/PID', String(this.pid), '/T'], { shell: false, windowsHide: true, stdio: 'ignore' });
+        const sysRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+        const tk = spawn(path.join(sysRoot, 'System32', 'taskkill.exe'), ['/PID', String(this.pid), '/T'], { shell: false, windowsHide: true, stdio: 'ignore' });
         tk.on('error', () => { try { this.child.kill(); } catch { /* rien */ } });
       } catch { try { this.child.kill(); } catch { /* rien */ } }
     } else {
@@ -208,6 +209,7 @@ async function checkReady(plan, opts) {
   if (plan.missing && plan.missing.length) throw new LaunchError('NOT_INSTALLED', `${plan.missing.length} fichier(s) manquant(s)`);
   const byPath = new Map(plan.files.map((f) => [path.resolve(f.path), f]));
   const wanted = new Set([path.resolve(plan.clientJar)]);
+  if (plan.logging && plan.logging.path) wanted.add(path.resolve(plan.logging.path));
   for (const l of plan.libraries) if (l.classpath || l.native) wanted.add(path.resolve(l.path));
   if (plan.java.auto) {
     wanted.add(path.resolve(plan.java.executable));
@@ -241,13 +243,42 @@ async function checkReady(plan, opts) {
       throw new LaunchError('JAVA_MISSING', plan.java.executable);
     }
   } else {
-    if (!plan.java.bare) {
-      try { await fsp.access(plan.java.executable); } catch { throw new LaunchError('JAVA_MISSING', plan.java.executable); }
+    let exe = plan.java.executable;
+    if (plan.java.bare) {
+      exe = await findInPath(exe);
+      if (!exe) throw new LaunchError('JAVA_MISSING', plan.java.executable);
+    } else {
+      try { await fsp.access(exe); } catch { throw new LaunchError('JAVA_MISSING', exe); }
     }
-    const { major } = await probeJava(plan.java.executable);
+    const { major } = await probeJava(exe);
     const min = plan.java.minMajor || 8;
     if (major < min) throw new LaunchError('JAVA_TOO_OLD', `Java ${major}, il faut Java ${min} ou plus récent`);
+    return exe; // chemin complet : c'est exactement ce Java-là qui sera lancé
   }
+  return plan.java.executable;
+}
+
+/**
+ * Cherche un programme dans le PATH, jamais dans le dossier courant
+ * (Windows y regarderait d'abord : un java.exe posé dans le dossier du jeu serait lancé).
+ */
+async function findInPath(name) {
+  const dirs = String(process.env.PATH || process.env.Path || '').split(path.delimiter).filter((d) => d && d !== '.' && path.isAbsolute(d));
+  const exts = process.platform === 'win32'
+    ? (/\.[a-z0-9]+$/i.test(name) ? [''] : String(process.env.PATHEXT || '.EXE;.COM').split(';').filter((e) => /^\.(exe|com)$/i.test(e)))
+    : [''];
+  for (const d of dirs) {
+    for (const e of exts) {
+      const p = path.join(d, name + e);
+      try {
+        const st = await fsp.stat(p);
+        if (!st.isFile()) continue;
+        if (process.platform !== 'win32') await fsp.access(p, fs.constants.X_OK);
+        return p;
+      } catch { /* suivant */ }
+    }
+  }
+  return null;
 }
 
 /**
@@ -262,7 +293,8 @@ async function launch(opts = {}) {
   if (!plan) plan = await prepare(opts);
   // Dossier d'instance donné au lancement : il remplace celui du plan.
   if (opts.plan && (opts.gameDir || opts.dossierInstance)) plan = { ...plan, gameDir: path.resolve(String(opts.gameDir || opts.dossierInstance)) };
-  await checkReady(plan, opts);
+  const javaExe = await checkReady(plan, opts);
+  if (javaExe !== plan.java.executable) plan = { ...plan, java: { ...plan.java, executable: javaExe } };
   await extractNatives(plan);
   try { await fsp.mkdir(plan.gameDir, { recursive: true }); } catch (err) { throw fromSystemError(err, plan.gameDir); }
 
