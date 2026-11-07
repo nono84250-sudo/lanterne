@@ -46,7 +46,7 @@ For Forge and NeoForge, `prepare()` already downloads the official installer (a 
 
 ## Accounts (`launch`)
 
-- `{ type: 'msa', name, uuid, accessToken, xuid? }`: Microsoft account. Sign-in is done by your launcher with **your own
+- `{ type: 'msa', name, uuid, accessToken, xuid?, clientId? }`: Microsoft account. Sign-in is done by your launcher with **your own
   application (client) ID**, not by this engine.
 - `{ type: 'offline', name }`, `{ type: 'demo' }`.
 

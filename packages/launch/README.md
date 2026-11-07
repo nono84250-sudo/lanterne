@@ -55,13 +55,13 @@ Si un serveur officiel est en panne (erreur 5xx), le moteur joue avec ce qui est
 
 ## Comptes (`launch`)
 
-- `{ type: 'msa', name, uuid, accessToken, xuid? }` : compte Microsoft (la connexion se fait dans le launcher, pas ici).
+- `{ type: 'msa', name, uuid, accessToken, xuid?, clientId? }` : compte Microsoft (la connexion se fait dans le launcher, pas ici).
 - `{ type: 'offline', name }` : hors-ligne (solo).
 - `{ type: 'demo' }` : mode démo.
 
 Autres options : `memory: { min, max }` (Mo), `quickPlay: { singleplayer | multiplayer | realms }`, `resolution: { width, height }`, `jvmArgs`, `gameArgs`, `onLog`.
 
-- Avant chaque lancement, le jeu, les bibliothèques et Java sont contrôlés par empreinte SHA-1 (mis en cache, rapide après le premier lancement).
+- Avant chaque lancement, le jeu, les bibliothèques et les fichiers essentiels de Java sont contrôlés par empreinte SHA-1 (mis en cache, rapide après le premier lancement).
   `fastLaunch: true` se contente des tailles. Un fichier abîmé donne `NOT_INSTALLED` : il suffit d'appeler `repair()`.
 - Si `jvmArgs` est donné, les options Java conseillées par Mojang (`default-user-jvm`) ne sont pas ajoutées.
 - La connexion Microsoft n'est pas faite par ce moteur : le launcher la fait avec **son propre identifiant d'application** (client ID).
@@ -92,6 +92,7 @@ Toutes les erreurs sont des `LaunchError` avec un `code` précis et un message c
 npm test            # tests automatiques (faux serveur HTTPS local, ZIP piégés, coupures, disque plein…)
 node test/live/smoke.js 1.20.1 forge     # essai réel : installe et lance jusqu'au menu
 npm run test:live                        # toute la matrice d'essais réels (long)
+node test/live/compare-mclc.js           # commande identique à minecraft-launcher-core 3.18 (classpath, options du jeu)
 ```
 
 ## Licence

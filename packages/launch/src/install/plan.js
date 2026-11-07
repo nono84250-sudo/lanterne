@@ -197,7 +197,8 @@ async function prepare(opts = {}) {
   const lc = version.logging && version.logging.client;
   if (lc && lc.file && lc.file.url && typeof lc.argument === 'string') {
     if (!(typeof lc.file.sha1 === 'string' && SAFE_HASH.test(lc.file.sha1.toLowerCase()))) throw new LaunchError('MANIFEST_INVALID', 'empreinte des journaux');
-    const lid = safeRelPath(String(lc.file.id || 'client.xml'));
+    const lid = String(lc.file.id || 'client.xml');
+    if (!/^[A-Za-z0-9_.-]{1,64}$/.test(lid) || /^\.+$/.test(lid)) throw new LaunchError('MANIFEST_INVALID', 'nom du fichier des journaux');
     logging = { argument: lc.argument, path: path.join(L.assets, 'log_configs', lid.replace(/\//g, '_')) };
     files.push({ url: lc.file.url, path: logging.path, sha1: lc.file.sha1, size: lc.file.size, stage: 'jeu' });
   }

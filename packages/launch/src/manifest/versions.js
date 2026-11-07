@@ -173,7 +173,8 @@ function mergeVersion(parent, child) {
   }
   if (child.javaVersion === undefined && parent.javaVersion !== undefined) out.javaVersion = parent.javaVersion;
   // Un « logging » vide chez l'enfant (Forge 1.12) ne doit pas effacer celui du parent.
-  out.logging = child.logging && Object.keys(child.logging).length ? child.logging : parent.logging;
+  // Journaux : toujours la configuration de Mojang (jamais celle d'un profil de chargeur).
+  out.logging = parent.logging;
   // Jar du jeu : seulement si l'enfant en nomme un (ancien Forge : « jar: 1.8.9 »).
   // Sinon, comme le launcher officiel, le jar de base est copié sous le nom de
   // la version moddée (Forge récent en a besoin pour ignorer le bon fichier).
