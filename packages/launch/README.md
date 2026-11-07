@@ -26,7 +26,7 @@ await install(plan, { control: controle, onProgress: (p) => console.log(p.percen
 const jeu = await launch({ plan, account: { type: 'offline', name: 'Steve' }, memory: { max: 4096 } });
 jeu.on('journal', (ligne) => console.log(ligne));   // jeton toujours masqué
 jeu.on('fermeture', (code) => console.log('fin', code));
-// jeu.arreter();
+// jeu.arreter();                        // fermeture propre (monde sauvegardé), forcée après 30 s ; arreter({ force: true })
 // jeu.exporterJournal();                  // pour le support : sans jeton, pseudo, UUID ni dossier personnel
 // jeu.exporterJournal({ source: 'jeu' }); // seulement les lignes du jeu (ou 'lanceur')
 

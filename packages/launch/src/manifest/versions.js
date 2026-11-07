@@ -1,6 +1,7 @@
 'use strict';
 
 const fsp = require('node:fs/promises');
+const { rename: fsRename } = require('../fsutil');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { LaunchError, fromSystemError } = require('../errors');
@@ -45,7 +46,7 @@ async function writeJsonFile(file, data) {
     await fsp.mkdir(path.dirname(file), { recursive: true });
     const part = `${file}.${crypto.randomBytes(6).toString('hex')}.part`;
     await fsp.writeFile(part, JSON.stringify(data, null, 2), { flag: 'wx' });
-    await fsp.rename(part, file);
+    await fsRename(part, file);
   } catch (err) {
     throw fromSystemError(err, file);
   }

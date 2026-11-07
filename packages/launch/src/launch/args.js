@@ -92,6 +92,9 @@ const JVM_ALLOWED = [
   /^-DFabricMcEmu=\s*[A-Za-z0-9_.$]+\s*$/,
   /^-DlibraryDirectory=\$\{library_directory\}$/,
   /^--enable-native-access=[\w.,-]+$/,
+  /^--sun-misc-unsafe-memory-access=(?:allow|warn|debug|deny)$/,
+  /^-XX:(?:MaxRAMPercentage|InitialRAMPercentage|MinRAMPercentage)=\d+(?:\.\d+)?$/,
+  /^-XX:ErgoHeapSizeLimit=\d+[kKmMgG]?$/,
   /^--add-(?:exports|opens|reads|modules)=[A-Za-z0-9_.\/=,-]+$/,
 ];
 // -Dclé=valeur : chemins seulement vers le dossier des natives, sinon valeur simple sans chemin.

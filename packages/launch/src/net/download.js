@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+const { rename: fsRename } = require('../fsutil');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { LaunchError, fromSystemError, isCancel } = require('../errors');
@@ -191,7 +192,7 @@ async function downloadOnce(file, opts = {}) {
       throw new LaunchError('INTEGRITY', path.basename(file.path), { url: r.url, file: file.path });
     }
     try {
-      await fsp.rename(part, file.path);
+      await fsRename(part, file.path);
     } catch (err) { throw fromSystemError(err, file.path); }
     return { bytes: written, sha1: digest };
   } catch (err) {
