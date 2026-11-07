@@ -10,7 +10,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { LaunchError, fromSystemError } = require('../errors');
 const { getJson, getText } = require('../net/http');
-const { downloadFile, sha1File } = require('../net/download');
+const { downloadFile, sha1File, isFileValid } = require('../net/download');
 const { layout, checkId, readJsonFile, writeJsonFile, isNetworkError } = require('../manifest/versions');
 const { parseMaven, safeRelPath } = require('../manifest/maven');
 const { compareDotted } = require('../manifest/rules');
@@ -256,13 +256,29 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
   const localId = (versionId) => (kind === 'neoforge' && mc === '1.20.1' ? `neoforge-${versionId}` : versionId);
   const installerFile = (full) => path.join(L.cache, 'installers', `${kind}-${full}-installer.jar`);
 
+  /**
+   * Les fichiers que seul l'installeur fournit (jar Forge sans adresse de
+   * téléchargement) sont-ils toujours là et intacts ? Sinon il faut les ressortir.
+   */
+  const providedOk = async (id) => {
+    const v = await readJsonFile(path.join(L.versions, id, `${id}.json`));
+    if (!v) return false;
+    for (const lib of Array.isArray(v.libraries) ? v.libraries : []) {
+      const a = lib && lib.downloads && lib.downloads.artifact;
+      if (!a || a.url !== '' || typeof a.path !== 'string') continue;
+      const p = path.join(L.libraries, ...safeRelPath(a.path).split('/'));
+      if (!(await isFileValid({ path: p, sha1: a.sha1, size: a.size }))) return false;
+    }
+    return true;
+  };
+
   /** Résultat à partir d'une installation déjà faite (marqueur + installeur intact). */
   const fromMarker = async (id) => {
     const marker = await readJsonFile(markerName(id));
     if (!marker || marker.loader !== kind || typeof marker.full !== 'string' || !SAFE_LOADER_VERSION.test(marker.full)) return null;
     const installerPath = installerFile(marker.full);
     if (!marker.installerSha1 || (await sha1File(installerPath)) !== marker.installerSha1) return null;
-    if (!(await readJsonFile(path.join(L.versions, id, `${id}.json`)))) return null;
+    if (!(await providedOk(id))) return null;
     // Les processeurs sont relus dans l'installeur vérifié (jamais pris dans un fichier local).
     const zip = await openZip(installerPath);
     try {
@@ -276,7 +292,7 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
   const offlineFind = async () => {
     let found = null;
     await findInstalled(opts.root, (n) => kind === 'forge'
-      ? (n.startsWith(`${mc}-forge`) && (!loaderVersion || n.includes(loaderVersion)))
+      ? (n.toLowerCase().startsWith(`${mc}-forge`) && (!loaderVersion || n.includes(loaderVersion)))
       : mc === '1.20.1'
         ? (n.startsWith('neoforge-1.20.1-forge-') && (!loaderVersion || n.endsWith(loaderVersion)))
         : (n.startsWith('neoforge-') && n.slice(9).startsWith(loaderVersion || neoforgePrefix(mc))),
@@ -323,7 +339,7 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
     if (!version || typeof version.id !== 'string') throw new LaunchError('LOADER_INSTALL_FAILED', 'profil sans nom');
     const id = checkId(localId(version.id));
     const marker = await readJsonFile(markerName(id));
-    if (marker && marker.loader === kind && marker.installerSha1 === sha1 && (await readJsonFile(path.join(L.versions, id, `${id}.json`)))) {
+    if (marker && marker.loader === kind && marker.installerSha1 === sha1 && (await providedOk(id))) {
       forge.libraries = await completeLibraries(forge.libraries, opts.net, 8, marker.librarySha1 || {});
       return { versionId: id, loaderVersion: marker.loaderVersion, forge: forge.processors.length ? forge : null };
     }

@@ -4,9 +4,10 @@
   "private": true,
   "description": "Moteur qui télécharge, installe et lance Minecraft (vanilla, Fabric, Quilt, NeoForge, Forge). Zéro dépendance.",
   "main": "src/index.js",
+  "exports": { ".": "./src/index.js", "./package.json": "./package.json" },
   "license": "MIT",
   "engines": { "node": ">=22" },
-  "files": ["src", "README.md", "LICENSE"],
+  "files": ["src", "README.md", "README.en.md", "SECURITY.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {
     "test": "node test/run.js",
     "test:live": "node test/live/run-live.js"

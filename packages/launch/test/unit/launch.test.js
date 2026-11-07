@@ -108,14 +108,17 @@ test('lancement réel d\'un processus : journal, jeton jamais visible, fermeture
   // Faux « Java » : Node lui-même, qui affiche ses arguments (dont le jeton).
   const v = {
     id: 'faux', type: 'release', mainClass: 'Main',
-    arguments: { jvm: ['-e', 'console.log(process.argv.join(" ")); console.error("erreur test"); setTimeout(()=>process.exit(3),50)'], game: ['--accessToken', '${auth_access_token}'] },
+    arguments: { jvm: [], game: ['--accessToken', '${auth_access_token}'] },
   };
   const plan = fakePlan(root, v, { libraries: [], logging: null });
-  const game = await launch({ plan, account: MSA });
+  const game = await launch({ plan, account: MSA, jvmArgs: ['-e', 'console.log(process.argv.join(" ")); console.error("erreur test"); setTimeout(()=>process.exit(3),50)'] });
+  const crash = new Promise((r) => game.on('erreur', r));
   const lines = [];
   game.on('journal', (l) => lines.push(l));
   const code = await new Promise((r) => game.on('fermeture', r));
   assert.equal(code, 3);
+  assert.equal((await crash).code, 'GAME_CRASHED');
+  assert.ok(!require('node:util').inspect(game, { depth: 5 }).includes('SECRETSECRET'), 'console.log(jeu) sans jeton');
   const all = lines.join('\n') + game.exporterJournal() + game.command;
   assert.ok(all.includes('erreur test'));
   assert.ok(!all.includes('SECRETSECRET'), 'le jeton ne doit jamais apparaître');
@@ -136,8 +139,8 @@ test('version pas installée : erreur claire', async () => {
 
 test('arrêter() termine le jeu', async () => {
   const root = await tmpDir();
-  const v = { id: 'long', mainClass: 'Main', arguments: { jvm: ['-e', 'setInterval(()=>{},1000)'], game: [] } };
-  const game = await launch({ plan: fakePlan(root, v, { libraries: [], logging: null }), account: { name: 'Steve' } });
+  const v = { id: 'long', mainClass: 'Main', arguments: { jvm: [], game: [] } };
+  const game = await launch({ plan: fakePlan(root, v, { libraries: [], logging: null }), account: { name: 'Steve' }, jvmArgs: ['-e', 'setInterval(()=>{},1000)'] });
   setTimeout(() => game.arreter(), 100);
   await new Promise((r) => game.on('fermeture', r));
   assert.equal(game.exited, true);

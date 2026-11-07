@@ -10,7 +10,7 @@ const { libraryKey } = require('./maven');
 
 const VERSION_MANIFEST_URL = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
 const SAFE_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._\-+ ]{0,98}[A-Za-z0-9_\-+])?$/;
-const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+const RESERVED = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
 
 /** Dossiers partagés (cache commun à toutes les instances). */
 function layout(root) {
@@ -55,6 +55,8 @@ async function writeJsonFile(file, data) {
 function isNetworkError(err) {
   if (!(err instanceof LaunchError)) return false;
   if (['NETWORK', 'TIMEOUT'].includes(err.code)) return true;
+  // Serveur en panne ou surchargé : comme une coupure (on joue avec ce qui est installé).
+  if (err.code === 'HTTP_STATUS' && (err.status >= 500 || err.status === 429 || err.status === 408)) return true;
   return !!err.redirected && ['INSECURE_URL', 'HOST_NOT_ALLOWED'].includes(err.code);
 }
 
@@ -116,10 +118,12 @@ async function loadVersionJson(id, opts) {
       entry = manifest.versions.find((v) => v.id === id) || null;
     } catch (err) {
       if (!(err instanceof LaunchError && err.code === 'OFFLINE')) throw err;
+      if (!local) throw err; // jamais rien téléchargé et pas d'Internet : OFFLINE, pas « n'existe pas »
     }
   } else if (!local) {
     const manifest = await readJsonFile(path.join(L.cache, 'version_manifest_v2.json'));
-    if (manifest && manifest.versions.some((v) => v.id === id)) throw new LaunchError('OFFLINE', id);
+    // Sans liste en cache, on ne peut pas savoir : c'est un manque d'Internet, pas une version inconnue.
+    if (!validManifest(manifest) || manifest.versions.some((v) => v.id === id)) throw new LaunchError('OFFLINE', id);
   }
 
   if (entry) {
@@ -183,6 +187,8 @@ async function resolveVersion(id, opts, depth = 0) {
   if (depth > 8) throw new LaunchError('MANIFEST_INVALID', 'héritage trop profond');
   const data = await loadVersionJson(id, opts);
   if (!data || typeof data !== 'object') throw new LaunchError('MANIFEST_INVALID', id);
+  // L'identifiant écrit dans le fichier doit être celui du dossier (sinon chemins détournés).
+  if (data.id !== id) throw new LaunchError('MANIFEST_INVALID', `identifiant ${String(data.id).slice(0, 40)} ≠ ${id}`);
   if (data.inheritsFrom) {
     const parent = await resolveVersion(checkId(data.inheritsFrom), opts, depth + 1);
     return mergeVersion(parent, data);

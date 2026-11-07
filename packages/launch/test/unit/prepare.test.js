@@ -62,6 +62,22 @@ const fabricProfile = Buffer.from(JSON.stringify({
   libraries: [{ name: 'net.fabricmc:fabric-loader:0.1', url: 'https://maven.fabricmc.net/' }],
 }));
 
+// Forge ancien (format « versionInfo » + jar universal dans l'installeur)
+const { makeZip } = require('../helpers');
+const universal = Buffer.from('faux forge universal');
+const forgeDep = Buffer.from('dépendance forge');
+const forgeInstaller = makeZip([
+  { name: 'install_profile.json', data: JSON.stringify({
+    install: { path: 'net.minecraftforge:forge:1.0-1.0.0', filePath: 'forge-1.0-1.0.0-universal.jar' },
+    versionInfo: {
+      id: '1.0-Forge1.0.0', inheritsFrom: '1.0', mainClass: 'net.minecraft.launchwrapper.Launch',
+      minecraftArguments: '--username ${auth_player_name} --tweakClass net.minecraftforge.fml.common.launcher.FMLTweaker',
+      libraries: [{ name: 'net.minecraftforge:forge:1.0-1.0.0' }, { name: 'org.x:dep:1', url: 'https://maven.minecraftforge.net/', checksums: [sha1(forgeDep)] }],
+    },
+  }) },
+  { name: 'forge-1.0-1.0.0-universal.jar', data: universal },
+]);
+
 const TOKEN = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SECRETSECRETSECRET123';
 
 let srv;
@@ -82,6 +98,12 @@ test.before(async () => {
     '/meta.fabricmc.net/v2/versions/loader/1.0/0.1/profile/json': serve(fabricProfile),
     '/maven.fabricmc.net/net/fabricmc/fabric-loader/0.1/fabric-loader-0.1.jar': serve(fabricJar),
     '/maven.fabricmc.net/net/fabricmc/fabric-loader/0.1/fabric-loader-0.1.jar.sha1': serve(Buffer.from(sha1(fabricJar))),
+    '/maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml': serve(Buffer.from('<metadata><versioning><versions><version>1.0-1.0.0</version></versions></versioning></metadata>')),
+    '/files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json': serve(Buffer.from(JSON.stringify({ promos: { '1.0-recommended': '1.0.0' } }))),
+    '/maven.minecraftforge.net/net/minecraftforge/forge/1.0-1.0.0/forge-1.0-1.0.0-installer.jar': serve(forgeInstaller),
+    '/maven.minecraftforge.net/net/minecraftforge/forge/1.0-1.0.0/forge-1.0-1.0.0-installer.jar.sha1': serve(Buffer.from(sha1(forgeInstaller))),
+    '/maven.minecraftforge.net/org/x/dep/1/dep-1.jar': serve(forgeDep),
+    '/flaky/piston-meta.mojang.com/mc/game/version_manifest_v2.json': (req, res) => { res.statusCode = 503; res.end(); },
   });
   __setTestMirror(`https://localhost:${srv.port}/`);
   HOSTS = [`localhost:${srv.port}`];
@@ -193,5 +215,66 @@ test('sites officiels seulement : sans autorisation du faux serveur, tout est re
   const root = await tmpDir();
   // Par défaut, localhost n'est pas autorisé : prepare ne peut rien télécharger.
   await assert.rejects(lanterne.prepare({ version: '1.0', root }), (e) => ['OFFLINE', 'HOST_NOT_ALLOWED'].includes(e.code));
+  await fsp.rm(root, { recursive: true, force: true });
+});
+
+test('Forge ancien : installeur vérifié, jar universal extrait, réparé s\'il est abîmé, retrouvé hors-ligne', { skip: skipNoRuntime }, async () => {
+  const root = await tmpDir();
+  let plan = await lanterne.prepare({ version: '1.0', loader: 'forge', root, allowedHosts: HOSTS });
+  assert.equal(plan.id, '1.0-Forge1.0.0');
+  assert.equal(plan.loaderVersion, '1.0.0');
+  const uni = plan.generated.find((g) => g.name === 'net.minecraftforge:forge:1.0-1.0.0');
+  assert.ok(uni, 'jar universal fourni par l\'installeur');
+  assert.equal(sha1(await fsp.readFile(uni.path)), sha1(universal));
+  assert.ok(plan.libraries.some((l) => l.name === 'org.x:dep:1' && l.sha1 === sha1(forgeDep)), 'empreinte « checksums » de l\'ancien Forge');
+  await lanterne.install(plan);
+  assert.equal((await lanterne.verify(plan)).ok, true);
+
+  // Jar universal abîmé (même taille) : verify le voit, repair le ressort de l'installeur.
+  await fsp.writeFile(uni.path, Buffer.alloc(universal.length, 0x42));
+  const v = await lanterne.verify(plan);
+  assert.equal(v.ok, false);
+  await lanterne.repair(plan);
+  assert.equal(sha1(await fsp.readFile(uni.path)), sha1(universal));
+
+  // Jar supprimé : un nouveau prepare le remet.
+  await fsp.rm(uni.path);
+  plan = await lanterne.prepare({ version: '1.0', loader: 'forge', root, allowedHosts: HOSTS });
+  assert.equal(sha1(await fsp.readFile(uni.path)), sha1(universal));
+
+  // Hors-ligne : retrouvé malgré la majuscule de « Forge » dans le nom.
+  const off = await lanterne.prepare({ version: '1.0', loader: 'forge', root, offline: true, allowedHosts: HOSTS });
+  assert.equal(off.id, '1.0-Forge1.0.0');
+  await fsp.rm(root, { recursive: true, force: true });
+});
+
+test('serveur Mojang en panne (503) : on joue avec ce qui est installé', { skip: skipNoRuntime }, async () => {
+  const root = await tmpDir();
+  await lanterne.install(await lanterne.prepare({ version: '1.0', root, allowedHosts: HOSTS }));
+  __setTestMirror(`https://localhost:${srv.port}/flaky/`);
+  try {
+    const plan = await lanterne.prepare({ version: '1.0', root, allowedHosts: HOSTS });
+    assert.equal(plan.offline, true);
+    assert.equal(plan.count, 0);
+  } finally {
+    __setTestMirror(`https://localhost:${srv.port}/`);
+  }
+  await fsp.rm(root, { recursive: true, force: true });
+});
+
+test('premier lancement sans Internet : OFFLINE (et pas « version inconnue »)', async () => {
+  const root = await tmpDir();
+  await assert.rejects(lanterne.prepare({ version: '1.0', root, offline: true, allowedHosts: HOSTS }), { code: 'OFFLINE' });
+  await fsp.rm(root, { recursive: true, force: true });
+});
+
+test('jeton jamais visible dans console.log d\'une erreur de lancement', { skip: skipNoRuntime }, async () => {
+  const root = await tmpDir();
+  const plan = await lanterne.prepare({ version: '1.0', root, allowedHosts: HOSTS });
+  await lanterne.install(plan);
+  await fsp.chmod(plan.java.executable, 0o644); // Java plus exécutable
+  const err = await lanterne.launch({ plan, account: { type: 'msa', name: 'Steve', uuid: '069a79f444e94726a5befca90e38aaf5', accessToken: TOKEN } }).catch((e) => e);
+  assert.equal(err.name, 'LaunchError');
+  assert.ok(!require('node:util').inspect(err, { depth: 10 }).includes('SECRETSECRET'));
   await fsp.rm(root, { recursive: true, force: true });
 });

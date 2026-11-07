@@ -14,11 +14,11 @@ Please do **not** open a public issue. Use GitHub's private vulnerability report
 | Fichier modifié en route | HTTPS obligatoire à chaque étape, même après redirection. Empreinte SHA-1 **obligatoire** et taille vérifiées pour chaque fichier. Écriture dans un `.part` (jamais via un lien symbolique), puis renommage. |
 | Site non officiel | Liste blanche : Mojang, Fabric, Quilt, NeoForge, Forge. Port standard uniquement, sauf s'il est écrit explicitement. Les portails Wi-Fi captifs sont traités comme « pas d'Internet ». |
 | Archive piégée | Extracteur maison : refuse `../`, chemins absolus, `C:`, UNC, caractère nul, `:`, noms réservés Windows, point/espace final, doublons. Ignore les liens symboliques et les droits spéciaux. Plafonds de taille, de nombre et de taux de compression (bombes ZIP), plus bas pour les natives. |
-| Commande détournée | Java est lancé avec une liste d'arguments (`shell: false`). Les options Java venant des fichiers téléchargés sont filtrées (`-javaagent`, `-agentlib`, `-agentpath`, `@fichier`, `-Xbootclasspath`, `-XX:On…`, enregistrement JFR…). Le jeton n'est jamais placé dans les options Java. |
+| Commande détournée | Java est lancé avec une liste d'arguments (`shell: false`). Les options Java venant des fichiers téléchargés passent par une **liste blanche** : tout ce qui n'est pas connu est ignoré (par exemple `-javaagent`, `@fichier`, `-XX:On…`, `-Dminecraft.api.*.host`, `-Dlog4j.configurationFile` distant). La configuration des journaux de Mojang est toujours appliquée en dernier. Le jeton n'est jamais placé dans les options Java. |
 | Lien qui sort du dossier Java | Les liens du runtime Mojang ne sont créés que s'ils restent dans son dossier et visent un vrai fichier. |
 | Expression piégée (ReDoS) | Les règles « os.version » ne sont évaluées que si elles sont simples (64 caractères au plus). |
 | Fichier local abîmé ou remplacé | Avant chaque lancement : empreinte complète du jeu, des bibliothèques et de Java (sauf `fastLaunch`). |
-| Fuite du jeton | Masqué dans tous les journaux, jamais renvoyé par l'API. `exporterJournal()` retire aussi le pseudo, l'UUID et le dossier personnel. |
+| Fuite du jeton | Masqué dans tous les journaux, jamais renvoyé par l'API, absent de `console.log(jeu)` et des erreurs. `exporterJournal()` retire aussi le pseudo, l'UUID et le dossier personnel. |
 
 ## Limites connues (à connaître)
 

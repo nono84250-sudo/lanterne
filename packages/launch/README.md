@@ -50,7 +50,8 @@ await repair({ version: '1.21.4', loader: 'fabric', root: dossier });   // ne re
 | `fullCheck` | `true` : contrôle l'empreinte de chaque fichier dès `prepare()` (plus lent) |
 
 À savoir : pour Forge et NeoForge, `prepare()` télécharge déjà le programme d'installation officiel (quelques Mo),
-car la liste des fichiers est dedans.
+car la liste des fichiers est dedans. Ce petit téléchargement n'a pas de barre de progression ; il s'annule avec `control` ou `annuler`.
+Si un serveur officiel est en panne (erreur 5xx), le moteur joue avec ce qui est déjà installé, comme sans Internet.
 
 ## Comptes (`launch`)
 
@@ -70,7 +71,7 @@ Autres options : `memory: { min, max }` (Mo), `quickPlay: { singleplayer | multi
 Toutes les erreurs sont des `LaunchError` avec un `code` précis et un message clair en français (`err.userMessage`) :
 `NETWORK`, `OFFLINE`, `TIMEOUT`, `DISK_FULL`, `PERMISSION`, `INTEGRITY`, `INSECURE_URL`, `HOST_NOT_ALLOWED`,
 `ZIP_UNSAFE`, `ZIP_TOO_LARGE`, `VERSION_NOT_FOUND`, `LOADER_NOT_FOUND`, `JAVA_MISSING`, `JAVA_UNSUPPORTED`,
-`LOADER_INSTALL_FAILED`, `NOT_INSTALLED`, `LAUNCH_FAILED`, `CANCELLED`…
+`JAVA_TOO_OLD`, `LOADER_INSTALL_FAILED`, `NOT_INSTALLED`, `LAUNCH_FAILED`, `GAME_CRASHED` (événement `erreur` si le jeu plante), `CANCELLED`, `INTERNAL`…
 
 ## Sécurité (dès la conception) — détails dans [SECURITY.md](SECURITY.md)
 
@@ -81,7 +82,7 @@ Toutes les erreurs sont des `LaunchError` avec un `code` précis et un message c
   n'applique jamais les droits spéciaux ; s'arrête si un fichier dépasse la taille annoncée ; plafonne le total (bombe ZIP).
 - Java démarré avec une **liste d'arguments** (jamais de ligne de commande interprétée).
 - Jeton du joueur masqué avant d'arriver dans les journaux ; il n'est jamais renvoyé par l'API.
-- Options Java venant des fichiers téléchargés filtrées : `-javaagent`, `-agentlib`, `@fichier`, `-XX:OnError`… sont refusées.
+- Options Java venant des fichiers téléchargés : **liste blanche** (seules les options connues de Mojang et des chargeurs passent ; `-javaagent`, `@fichier`, `-XX:OnError`, `-Dminecraft.api.*`, `-Dlog4j.configurationFile=https://…` sont refusées et signalées dans le journal).
 - Forge / NeoForge : les programmes d'installation officiels sont lancés localement ; le seul qui télécharge
   (cartes de noms Mojang) est remplacé par le téléchargeur sécurisé.
 

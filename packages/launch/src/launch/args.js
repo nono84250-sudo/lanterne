@@ -64,23 +64,47 @@ function substitute(arg, vars) {
 }
 
 /**
- * Options JVM venant des JSON téléchargés (Mojang, chargeurs) : on refuse tout
- * ce qui permettrait d'exécuter du code ou une commande en dehors du jeu.
+ * Options JVM venant des JSON téléchargés (Mojang, chargeurs) : LISTE BLANCHE.
+ * Seules les options connues et sans danger passent ; tout le reste est ignoré
+ * (et signalé dans le journal). Exemple de refus : -javaagent, @fichier,
+ * -XX:OnError, -Dminecraft.api.*.host (enverrait le jeton ailleurs),
+ * -Dlog4j.configurationFile=https://… (journal piégé).
  * Les options données par l'appelant (opts.jvmArgs) ne passent pas par ce filtre.
  */
-const FORBIDDEN_JVM = [
-  /^-agentlib/i, /^-agentpath/i, /^-javaagent/i, /^-Xbootclasspath/i, /^-Xrun/i, /^-Xdebug/i,
-  /^-XX:[+-]?On[A-Z]/, /^-XX:[+-]?(?:StartFlightRecording|FlightRecorderOptions|Flags|VMOptionsFile|ErrorFile|LogFile)/i,
-  /^-XX:[+-]?(?:EnableDynamicAgentLoading|PerfDataSaveFile)/i, /^--?patch-module/i, /^-Djava\.system\.class\.loader/i,
-  /^-Djava\.security\.(?:manager|policy)/i, /^-Djava\.rmi\./i, /^-Dcom\.sun\.management/i, /^-Djdk\.attach/i,
-  /^@/, /^-Xlog/i, /^-verbose/i,
+const JVM_FLAGS_WITH_VALUE = new Set(['-cp', '-classpath', '--class-path', '-p', '--module-path', '--add-modules', '--add-opens', '--add-exports', '--add-reads', '--enable-native-access']);
+const JVM_ALLOWED = [
+  /^-X(?:ss|ms|mx|mn)\d+[kKmMgG]?$/,
+  /^-XstartOnFirstThread$/,
+  /^-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw\.exe_minecraft\.exe\.heapdump$/,
+  /^-XX:[+-](?:UnlockExperimentalVMOptions|Use(?:G1|Z|Shenandoah|Parallel|Serial)GC|ZGenerational|UseCompactObjectHeaders|UseStringDeduplication|AlwaysPreTouch|ParallelRefProcEnabled|DisableExplicitGC|PerfDisableSharedMem)$/,
+  /^-XX:(?:G1[A-Za-z]+|MaxGCPauseMillis|StackShadowPages|ParallelGCThreads|ConcGCThreads|MaxTenuringThreshold|SurvivorRatio|InitiatingHeapOccupancyPercent)=\d+[kKmMgG%]?$/,
+  /^-D(?:java\.library\.path|jna\.tmpdir|org\.lwjgl\.[\w.]+|io\.netty\.[\w.]+|minecraft\.launcher\.(?:brand|version)|os\.(?:name|version)|FabricMcEmu|ignoreList|libraryDirectory|mergeModules|fml\.[\w.]+|forge\.[\w.]+|neoforge\.[\w.]+|java\.net\.preferIPv[46]\w*|file\.encoding|std(?:out|err)\.encoding|sun\.(?:stdout|stderr)\.encoding|log4j2\.formatMsgNoLookups|java\.awt\.headless)=/,
+  /^-D(?:fabric|loader|quilt)\.(?!addMods|loadMods|mods)[\w.]+=/,
+  /^--enable-native-access=[\w.,-]+$/,
 ];
+const LOG_CONFIG_ARG = /^-Dlog4j2?\.configurationFile=\$\{path\}$/;
 const SECRET_VAR = /\$\{(?:auth_[a-z_]+|user_properties|clientid)\}/i;
 
-function jvmArgAllowed(a) {
-  if (typeof a !== 'string' || a.includes('\0')) return false;
-  if (SECRET_VAR.test(a)) return false; // le jeton ne va jamais dans les options Java
-  return !FORBIDDEN_JVM.some((re) => re.test(a.trim()));
+function okString(a) {
+  return typeof a === 'string' && !a.includes('\0') && !SECRET_VAR.test(a); // le jeton ne va jamais dans les options Java
+}
+
+/** Filtre une liste d'options Java venant d'un JSON. */
+function filterJsonJvm(list, ignored) {
+  const out = [];
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (!okString(a)) { ignored.push(String(a)); continue; }
+    if (JVM_FLAGS_WITH_VALUE.has(a)) {
+      const val = list[i + 1];
+      if (typeof val === 'string' && okString(val) && !val.startsWith('-') && !val.startsWith('@')) { out.push(a, val); i++; }
+      else ignored.push(a);
+      continue;
+    }
+    if (JVM_ALLOWED.some((re) => re.test(a))) out.push(a);
+    else ignored.push(a);
+  }
+  return out;
 }
 
 function memoryArg(v, flag) {
@@ -163,7 +187,7 @@ function buildArgs(plan, opts = {}) {
   if (memMax) jvm.push(memMax);
   if (memMin) jvm.push(memMin);
   const ignored = [];
-  const fromJson = (list) => list.filter((a) => (jvmArgAllowed(a) ? true : (ignored.push(a), false)));
+  const fromJson = (list) => filterJsonJvm(list, ignored);
   const callerJvm = Array.isArray(opts.jvmArgs) ? opts.jvmArgs.map(String) : [];
   // Options JVM conseillées par Mojang (26.x) : seulement si l'appelant n'a pas
   // donné les siennes, et sans la mémoire si l'appelant l'a choisie.
@@ -172,13 +196,6 @@ function buildArgs(plan, opts = {}) {
       .filter((a) => !((memMax || memMin) && /^-Xm[sx]/.test(a)));
     jvm.push(...defaults);
   }
-  jvm.push(...callerJvm);
-  if (plan.logging && !opts.noLogConfig) {
-    const la = String(plan.logging.argument || '');
-    if (jvmArgAllowed(la) && la.includes('${path}')) jvm.push(la.replace('${path}', plan.logging.path));
-    else ignored.push(la);
-  }
-
   if (v.arguments && Array.isArray(v.arguments.jvm)) {
     jvm.push(...fromJson(expandList(v.arguments.jvm, features, plat)));
   } else {
@@ -186,6 +203,13 @@ function buildArgs(plan, opts = {}) {
     if (plat.name === 'windows') jvm.push('-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump');
     if (plat.arch === 'x86') jvm.push('-Xss1M');
     jvm.push('-Djava.library.path=${natives_directory}', '-Dminecraft.launcher.brand=${launcher_name}', '-Dminecraft.launcher.version=${launcher_version}', '-cp', '${classpath}');
+  }
+  // L'appelant passe après le JSON (la dernière option gagne), la config des journaux en tout dernier.
+  jvm.push(...callerJvm);
+  if (plan.logging && !opts.noLogConfig) {
+    const la = String(plan.logging.argument || '');
+    if (LOG_CONFIG_ARG.test(la)) jvm.push(`-Dlog4j.configurationFile=${plan.logging.path}`);
+    else ignored.push(la);
   }
 
   // --- Jeu

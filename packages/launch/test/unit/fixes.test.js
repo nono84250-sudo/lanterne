@@ -46,12 +46,27 @@ test('options Java venant d\'un JSON : les dangereuses sont retirées, celles de
   for (const bad of ['javaagent', 'agentlib', 'agentpath', '@/tmp', 'Xbootclasspath', 'OnError', 'OnOutOfMemory', 'FlightRecording', '-Dtok']) {
     assert.ok(!joined.includes(bad), bad);
   }
-  assert.ok(r.args.includes('-Dok=1') && r.args.includes('--add-opens') && r.args.includes('-Dmine=1'));
+  assert.ok(!r.args.includes('-Dok=1'), 'option inconnue : refusée (liste blanche)');
+  assert.ok(r.args.includes('--add-opens') && r.args.includes('java.base/java.lang=ALL-UNNAMED') && r.args.includes('-Dmine=1'));
   assert.ok(r.args.includes(TOKEN), 'le jeton reste dans les arguments du jeu');
-  assert.equal(r.ignored.length, 9);
-  assert.equal(logs.length, 9);
+  assert.equal(r.ignored.length, 10);
+  assert.equal(logs.length, 10);
   assert.ok(!logs.join('').includes('SECRETSECRET'));
   assert.equal(r.account.accessToken, undefined, 'le jeton ne ressort pas dans account');
+});
+
+test('liste blanche : envoi du jeton ailleurs ou journal piégé refusés, options Forge/NeoForge gardées', () => {
+  const jvm = ['-Dminecraft.api.env=custom', '-Dminecraft.api.auth.host=https://evil', '-Dlog4j.configurationFile=https://evil/x.xml',
+    '-Djavax.net.ssl.trustStore=/x', '-Dhttps.proxyHost=evil', '-XX:ArchiveClassesAtExit=/x', '-Dfabric.addMods=/x',
+    '-p', '${library_directory}/a.jar', '--add-modules', 'ALL-MODULE-PATH', '--add-exports', 'java.base/sun.security.util=cpw.mods.securejarhandler',
+    '-DignoreList=a,b', '-Dfml.pluginLayerLibraries=x', '--enable-native-access=ALL-UNNAMED', '-XX:+UseZGC', '-cp', '${classpath}'];
+  const p = { ...plan({ id: 'x', mainClass: 'M', arguments: { jvm, game: [] } }), logging: { argument: '-Dlog4j.configurationFile=${path}', path: '/r/log.xml' } };
+  const r = buildArgs(p, {});
+  const j = r.args.join(' ');
+  for (const bad of ['minecraft.api', 'evil', 'trustStore', 'Archive', 'addMods']) assert.ok(!j.includes(bad), bad);
+  for (const good of ['-p', 'ALL-MODULE-PATH', '-DignoreList=a,b', '-Dfml.pluginLayerLibraries=x', '--enable-native-access=ALL-UNNAMED', '-XX:+UseZGC']) assert.ok(r.args.includes(good), good);
+  assert.equal(r.args.filter((a) => a.startsWith('-Dlog4j.configurationFile')).length, 1);
+  assert.equal(r.args.at(-2), '-Dlog4j.configurationFile=/r/log.xml', 'config des journaux de Mojang en dernier');
 });
 
 test('options conseillées par Mojang (26.x) : ignorées si l\'appelant donne les siennes', () => {
@@ -204,4 +219,86 @@ test('vérifier : la copie du jeu pour le chargeur est contrôlée aussi', async
   assert.equal(r.ok, false);
   assert.deepEqual(r.incomplete, [to]);
   await fsp.rm(dir, { recursive: true, force: true });
+});
+
+// ---- Tour 2
+
+test('fusion : un JSON local dont l\'identifiant ne correspond pas au dossier est refusé', async () => {
+  const { resolveVersion } = require('../../src/manifest/versions');
+  const root = await tmpDir();
+  await fsp.mkdir(path.join(root, 'versions', 'custom'), { recursive: true });
+  await fsp.writeFile(path.join(root, 'versions', 'custom', 'custom.json'), JSON.stringify({ id: '../../../ailleurs/x', mainClass: 'M' }));
+  await assert.rejects(resolveVersion('custom', { root, offline: true }), { code: 'MANIFEST_INVALID' });
+  await fsp.rm(root, { recursive: true, force: true });
+});
+
+test('ZIP : aucun dossier créé de l\'autre côté d\'un lien', { skip: process.platform === 'win32' }, async () => {
+  const dir = await tmpDir();
+  const out = path.join(dir, 'out');
+  const ailleurs = path.join(dir, 'ailleurs');
+  await fsp.mkdir(out); await fsp.mkdir(ailleurs);
+  await fsp.symlink(ailleurs, path.join(out, 'lib'));
+  const z = path.join(dir, 'z.zip');
+  await fsp.writeFile(z, makeZip([{ name: 'lib/a/b/c.txt', data: 'x' }]));
+  await assert.rejects(extractZip(z, out), { code: 'ZIP_UNSAFE' });
+  assert.equal(fs.existsSync(path.join(ailleurs, 'a')), false);
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
+test('sons et textures (anciennes versions) : jamais écrits à travers un lien', { skip: process.platform === 'win32' }, async () => {
+  const { install } = require('../../src/install/install');
+  const dir = await tmpDir();
+  const obj = path.join(dir, 'assets', 'objects', 'aa', 'h');
+  await fsp.mkdir(path.dirname(obj), { recursive: true });
+  await fsp.writeFile(obj, 'son');
+  const victim = path.join(dir, 'victime.txt');
+  const gameDir = path.join(dir, 'inst');
+  await fsp.mkdir(path.join(gameDir, 'resources'), { recursive: true });
+  await fsp.symlink(victim, path.join(gameDir, 'resources', 'a.ogg'));
+  await install({
+    id: 't', root: dir, gameDir, offline: false, files: [], missing: [], libraries: [], generated: [], forge: null, copyJar: null,
+    assetIndex: { id: 'pre', virtual: false, mapToResources: true, objects: [{ name: 'a.ogg', hash: sha1(Buffer.from('son')), path: obj, size: 3 }] },
+    java: { auto: false, executable: 'java' },
+  });
+  assert.equal(fs.existsSync(victim), false, 'la cible du lien n\'est pas créée');
+  assert.equal(fs.lstatSync(path.join(gameDir, 'resources', 'a.ogg')).isSymbolicLink(), false);
+  assert.equal(await fsp.readFile(path.join(gameDir, 'resources', 'a.ogg'), 'utf8'), 'son');
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
+test('pause + annulation : une attente sur un fichier déjà en cours s\'arrête tout de suite', async () => {
+  const body = Buffer.alloc(200_000, 3);
+  const srv = await startServer({ '/p': serve(body, { slow: 20_000, delay: 20 }) });
+  const dir = await tmpDir();
+  try {
+    const f = { url: srv.url('/p'), path: path.join(dir, 'p.bin'), sha1: sha1(body), size: body.length };
+    const o = { allowedHosts: [`localhost:${srv.port}`] };
+    const c1 = createControl();
+    const first = downloadFile(f, { ...o, control: c1 });
+    await new Promise((r) => setTimeout(r, 30));
+    c1.pause();
+    const c2 = createControl();
+    const second = downloadFile({ ...f }, { ...o, control: c2 });
+    setTimeout(() => c2.cancel(), 30);
+    const t = Date.now();
+    await assert.rejects(second, { code: 'CANCELLED' });
+    assert.ok(Date.now() - t < 1000);
+    c1.cancel();
+    await first.catch(() => {});
+  } finally { await srv.close(); await fsp.rm(dir, { recursive: true, force: true }); }
+});
+
+test('contrôle enfant : son annulation le réveille même si le parent est en pause', async () => {
+  const parent = createControl();
+  parent.pause();
+  const child = createControl(parent);
+  const w = child.wait();
+  setTimeout(() => child.cancel(), 20);
+  await assert.rejects(w, { code: 'CANCELLED' });
+  child.dispose();
+});
+
+test('journal exporté : xuid et identifiant client retirés aussi', () => {
+  const t = anonymize('--xuid 2535412345678901 --clientId abcdclientid', { xuid: '2535412345678901', clientId: 'abcdclientid' });
+  assert.ok(!t.includes('2535412345678901') && !t.includes('abcdclientid'));
 });

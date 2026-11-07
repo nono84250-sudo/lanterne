@@ -56,7 +56,7 @@ async function runProcessors(plan, { javaPath, control, onLog }) {
   if (!forge || !forge.processors.length) return;
   if (await processorsDone(plan)) return;
   const L = layout(plan.root);
-  const log = onLog || (() => {});
+  const log = typeof onLog === 'function' ? (m) => { try { onLog(m); } catch { /* rien */ } } : () => {};
   const tmp = path.join(L.cache, 'tmp', `processors-${plan.id}`);
   await fsp.rm(tmp, { recursive: true, force: true });
   await fsp.mkdir(tmp, { recursive: true });
@@ -97,6 +97,7 @@ async function runProcessors(plan, { javaPath, control, onLog }) {
   const outputsDone = [];
   for (const proc of forge.processors) {
     if (control && control.cancelled) throw new LaunchError('CANCELLED');
+    if (control && typeof control.wait === 'function') await control.wait(); // Pause entre deux étapes
     const args = (proc.args || []).map(resolveArg);
     const outputs = Object.entries(proc.outputs || {}).map(([k, v]) => ({ path: resolveArg(k), sha1: resolveArg(v).toLowerCase() }));
 

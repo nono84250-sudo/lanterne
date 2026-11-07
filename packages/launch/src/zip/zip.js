@@ -59,7 +59,7 @@ function safeParts(name) {
     if (/[<>"|?*;\x00-\x1f]/.test(p)) throw new LaunchError('ZIP_UNSAFE', `caractère interdit : ${name}`);
     // Windows retire les points/espaces finaux et réserve CON, NUL, COM1… : refusés.
     if (/[ .]$/.test(p)) throw new LaunchError('ZIP_UNSAFE', `nom terminé par un point ou un espace : ${name}`);
-    if (/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i.test(p)) throw new LaunchError('ZIP_UNSAFE', `nom réservé par Windows : ${name}`);
+    if (/^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i.test(p)) throw new LaunchError('ZIP_UNSAFE', `nom réservé par Windows : ${name}`);
   }
   return parts;
 }
@@ -280,6 +280,16 @@ class ZipArchive {
       const rel = path.relative(root, target);
       if (rel.startsWith('..') || path.isAbsolute(rel)) throw new LaunchError('ZIP_UNSAFE', entry.name);
       const parent = path.dirname(target);
+      // Avant de créer quoi que ce soit : le dossier existant le plus profond ne doit pas mener ailleurs.
+      let probe = parent;
+      for (;;) {
+        try { await fsp.lstat(probe); break; } catch { const up = path.dirname(probe); if (up === probe) break; probe = up; }
+      }
+      try {
+        const realProbe = await fsp.realpath(probe);
+        const rp = path.relative(realRoot, realProbe);
+        if (rp.startsWith('..') || path.isAbsolute(rp)) throw new LaunchError('ZIP_UNSAFE', `dossier détourné : ${entry.name}`);
+      } catch (err) { throw fromSystemError(err, probe); }
       try { await fsp.mkdir(parent, { recursive: true }); } catch (err) { throw fromSystemError(err, parent); }
       // Un dossier existant ne doit pas être un lien qui pointe ailleurs.
       let realParent;

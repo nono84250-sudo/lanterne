@@ -1,9 +1,11 @@
 'use strict';
 
+const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const { LaunchError, fromSystemError } = require('../errors');
-const { downloadAll, isFileValid, sha1File } = require('../net/download');
+const { downloadAll, isFileValid, sha1File, safeLog } = require('../net/download');
 const { normalizeControl } = require('../net/control');
 const { extractZip } = require('../zip/zip');
 const { safeRelPath } = require('../manifest/maven');
@@ -45,28 +47,41 @@ async function materializeAssets(plan) {
   for (const o of ai.objects) {
     const rel = safeRelPath(o.name);
     const target = path.join(base, ...rel.split('/'));
-    if (await isFileValid({ path: target, sha1: o.hash }, { quick: true })) continue;
-    try {
-      await fsp.mkdir(path.dirname(target), { recursive: true });
-      await fsp.copyFile(o.path, target);
-    } catch (err) { throw fromSystemError(err, target); }
+    const st = await fsp.lstat(target).catch(() => null);
+    if (st && !st.isSymbolicLink() && st.isFile() && (await isFileValid({ path: target, sha1: o.hash, size: o.size }, { quick: true }))) continue;
+    if (st && (st.isSymbolicLink() || !st.isFile())) {
+      if (st.isDirectory()) throw new LaunchError('FILESYSTEM', `dossier à la place de ${rel}`);
+      await fsp.unlink(target).catch((err) => { throw fromSystemError(err, target); }); // jamais écrire à travers un lien
+    }
+    await safeCopy(o.path, target);
+  }
+}
+
+/** Copie sûre : vers un .part au nom aléatoire créé en exclusif (jamais via un lien), puis renommage. */
+async function safeCopy(from, to) {
+  const part = `${to}.${crypto.randomBytes(6).toString('hex')}.part`;
+  try {
+    await fsp.mkdir(path.dirname(to), { recursive: true });
+    await fsp.copyFile(from, part, fs.constants.COPYFILE_EXCL);
+    await fsp.rename(part, to);
+  } catch (err) {
+    await fsp.rm(part, { force: true }).catch(() => {});
+    throw fromSystemError(err, to);
   }
 }
 
 async function copyClientJar(plan) {
   const c = plan.copyJar;
   if (!c) return;
-  if (await isFileValid({ path: c.to, sha1: c.sha1, size: c.size }, { quick: false })) return;
-  try {
-    await fsp.mkdir(path.dirname(c.to), { recursive: true });
-    await fsp.copyFile(c.from, c.to + '.part');
-    await fsp.rename(c.to + '.part', c.to);
-  } catch (err) { throw fromSystemError(err, c.to); }
+  const st = await fsp.lstat(c.to).catch(() => null);
+  if (st && st.isFile() && (await isFileValid({ path: c.to, sha1: c.sha1, size: c.size }, { quick: false }))) return;
+  if (st && !st.isDirectory()) await fsp.unlink(c.to).catch(() => {});
+  await safeCopy(c.from, c.to);
 }
 
 /** Tout ce qui suit les téléchargements. */
 async function finish(plan, control, onLog, onProgress) {
-  const log = typeof onLog === 'function' ? onLog : () => {};
+  const log = safeLog(onLog);
   const step = (stage, message) => {
     log(`[lanceur] ${message}`);
     if (typeof onProgress === 'function') {
@@ -92,7 +107,8 @@ async function finish(plan, control, onLog, onProgress) {
 function readOpts(opts = {}) {
   // Noms du PDF : { annuler, progression }
   const control = normalizeControl({ control: opts.control || (opts.annuler && opts.annuler.cancel ? opts.annuler : undefined), signal: opts.signal || (opts.annuler instanceof AbortSignal ? opts.annuler : undefined) });
-  return { control, onProgress: opts.onProgress || opts.progression, onLog: opts.onLog || opts.journal, concurrency: opts.concurrency };
+  const onLog = opts.onLog || opts.journal;
+  return { control, onProgress: opts.onProgress || opts.progression, onLog: onLog ? safeLog(onLog) : undefined, concurrency: opts.concurrency };
 }
 
 /**
@@ -137,13 +153,24 @@ async function repair(plan, opts = {}) {
   const { control, onProgress, onLog, concurrency } = readOpts(opts);
   const { damaged, processorsOk, incomplete } = await verify(plan);
   // Hors-ligne : on ne supprime rien qu'on ne pourrait pas retélécharger.
-  if (damaged.length && plan.offline) throw new LaunchError('OFFLINE', `${damaged.length} fichier(s) abîmé(s) à retélécharger`);
+  const genBad = (plan.generated || []).filter((g) => incomplete.includes(g.path));
+  if ((damaged.length || genBad.length) && plan.offline) throw new LaunchError('OFFLINE', `${damaged.length + genBad.length} fichier(s) abîmé(s) à retélécharger`);
   for (const f of damaged) await fsp.rm(f.path, { force: true }).catch(() => {});
   if (plan.copyJar && incomplete.includes(plan.copyJar.to)) await fsp.rm(plan.copyJar.to, { force: true }).catch(() => {});
   if (!processorsOk && plan.forge) await fsp.rm(path.join(plan.root, 'versions', plan.id, '.lanterne-processed.json'), { force: true }).catch(() => {});
   await fsp.rm(path.join(nativesDir(plan), '.lanterne-natives'), { force: true }).catch(() => {});
-  if (plan.forge && incomplete.some((p) => (plan.generated || []).some((g) => g.path === p))) {
+  if (genBad.length) {
+    // Fichiers fournis par l'installeur du chargeur : on les supprime et on les ressort de l'installeur vérifié.
+    for (const g of genBad) await fsp.rm(g.path, { force: true }).catch(() => {});
     await fsp.rm(path.join(plan.root, 'versions', plan.id, '.lanterne-processed.json'), { force: true }).catch(() => {});
+    if (plan.loader === 'forge' || plan.loader === 'neoforge') {
+      await fsp.rm(path.join(plan.root, 'versions', plan.id, '.lanterne-loader.json'), { force: true }).catch(() => {});
+      const { ensureLoader } = require('../loaders');
+      await ensureLoader({
+        loader: plan.loader, mcVersion: plan.mcVersion, loaderVersion: plan.loaderVersion, root: plan.root, offline: plan.offline,
+        net: { allowedHosts: plan.allowedHosts, timeout: opts.timeout, signal: control.signal }, control,
+      });
+    }
   }
   await downloadAll(damaged, { control, onProgress, onLog, concurrency, allowedHosts: plan.allowedHosts, timeout: opts.timeout, retries: opts.retries });
   await finish(plan, control, onLog, onProgress);

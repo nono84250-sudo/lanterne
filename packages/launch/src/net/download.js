@@ -198,25 +198,47 @@ async function downloadOnce(file, opts = {}) {
   }
 }
 
+/** Journal de l'appelant : une erreur dans son code ne casse jamais l'installation. */
+function safeLog(fn) {
+  return typeof fn === 'function' ? (m) => { try { fn(m); } catch { /* rien */ } } : () => {};
+}
+
 // Un même fichier n'est jamais téléchargé deux fois en même temps (cache partagé).
 const inFlight = new Map();
 
 /** Télécharge un fichier avec nouvelles tentatives (attente croissante). */
 async function downloadFile(file, opts = {}) {
-  const key = path.resolve(String(file.path));
-  while (inFlight.has(key)) {
-    await inFlight.get(key).catch(() => {});
-    if (await isFileValid(file)) return { bytes: 0, sha1: file.sha1, skipped: true };
+  // Contrôle propre à cet appel (libéré à la fin : pas de fuite d'écouteurs).
+  const own = opts.control ? null : normalizeControl(opts);
+  const control = opts.control || own;
+  try {
+    const key = path.resolve(String(file.path));
+    while (inFlight.has(key)) {
+      // Même fichier déjà en cours ailleurs : on attend, mais « Annuler » reste immédiat.
+      await waitOrCancel(inFlight.get(key).catch(() => {}), control);
+      if (await isFileValid(file)) return { bytes: 0, sha1: file.sha1, skipped: true };
+    }
+    const p = downloadWithRetries(file, { ...opts, control });
+    inFlight.set(key, p);
+    try { return await p; } finally { if (inFlight.get(key) === p) inFlight.delete(key); }
+  } finally {
+    if (own) own.dispose();
   }
-  const p = downloadWithRetries(file, opts);
-  inFlight.set(key, p);
-  try { return await p; } finally { if (inFlight.get(key) === p) inFlight.delete(key); }
+}
+
+function waitOrCancel(promise, control) {
+  if (control.cancelled) return Promise.reject(new LaunchError('CANCELLED'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new LaunchError('CANCELLED'));
+    control.signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, resolve).finally(() => control.signal.removeEventListener('abort', onAbort));
+  });
 }
 
 async function downloadWithRetries(file, opts) {
   const control = normalizeControl(opts);
   const retries = opts.retries ?? 4;
-  const log = opts.onLog || (() => {});
+  const log = safeLog(opts.onLog);
   let lastErr;
   let attempt = 0;
   for (;;) {
@@ -331,7 +353,8 @@ class Progress {
  */
 async function downloadAll(files, opts = {}) {
   // Contrôle interne : une erreur arrête la file sans annuler celui de l'appelant.
-  const control = createControl(normalizeControl(opts));
+  const base = normalizeControl(opts);
+  const control = createControl(base);
   const concurrency = Math.max(1, Math.min(16, opts.concurrency || 12));
   // Deux entrées vers le même fichier : une seule fois.
   const seen = new Set();
@@ -363,10 +386,11 @@ async function downloadAll(files, opts = {}) {
     await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
   } finally {
     control.dispose();
+    if (base !== opts.control) base.dispose();
   }
   progress.emit(true);
   if (failure) throw failure;
   return progress.snapshot();
 }
 
-module.exports = { downloadFile, downloadAll, sha1File, isFileValid, Progress };
+module.exports = { downloadFile, downloadAll, sha1File, isFileValid, Progress, safeLog };

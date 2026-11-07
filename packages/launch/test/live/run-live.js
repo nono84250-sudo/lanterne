@@ -14,6 +14,7 @@ const { spawnSync } = require('node:child_process');
 const MATRIX = [
   ['1.8.9', 'vanilla'], ['1.8.9', 'forge'],
   ['1.12.2', 'vanilla'], ['1.12.2', 'forge'], ['1.12.2', 'vanilla', '--demo'],
+  ['1.16.5', 'vanilla'], ['1.16.5', 'forge'], ['1.19.4', 'vanilla'], ['1.19.4', 'fabric'], ['1.20.6', 'vanilla'], ['1.20.6', 'neoforge'],
   ['1.20.1', 'vanilla'], ['1.20.1', 'fabric'], ['1.20.1', 'quilt'], ['1.20.1', 'forge'], ['1.20.1', 'neoforge'],
   ['1.21.11', 'vanilla'], ['1.21.11', 'fabric'], ['1.21.11', 'quilt'], ['1.21.11', 'forge'], ['1.21.11', 'neoforge'],
   ['1.21.11', 'vanilla', '--offline'],
