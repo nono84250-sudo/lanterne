@@ -187,7 +187,7 @@ async function resolveForgeVersion(kind, mc, loaderVersion, net) {
     let lv = loaderVersion;
     if (!lv) {
       // files.minecraftforge.net en panne : on prend la plus récente du dépôt maven.
-      const promos = await getJson(FORGE_PROMOS, net).catch((err) => { if (isNetworkError(err) || (err && err.code === 'HTTP_STATUS')) return null; throw err; });
+      const promos = await getJson(FORGE_PROMOS, net).catch((err) => { if (isNetworkError(err) || (err && ['HTTP_STATUS', 'MANIFEST_INVALID', 'TOO_LARGE'].includes(err.code))) return null; throw err; });
       lv = promos && promos.promos && (promos.promos[`${mc}-recommended`] || promos.promos[`${mc}-latest`]);
       if (!lv) lv = all.map((v) => v.slice(mc.length + 1).split('-')[0]).sort(compareDotted).pop();
     }
