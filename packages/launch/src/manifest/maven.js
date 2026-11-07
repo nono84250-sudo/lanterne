@@ -4,7 +4,7 @@ const { LaunchError } = require('../errors');
 
 const SAFE = /^[A-Za-z0-9._\-+]+$/;
 // Noms interdits par Windows (CON, NUL, COM1…), avec ou sans extension.
-const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
+const RESERVED = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
 
 /**
  * « groupe:artefact:version[:classifier][@ext] » → morceaux + chemin relatif.

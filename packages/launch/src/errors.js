@@ -28,6 +28,8 @@ const MESSAGES = {
   JAVA_MISSING: 'Java est introuvable. Il faut installer Java ou activer Java automatique.',
   JAVA_UNSUPPORTED: "Aucun Java automatique n'existe pour cet ordinateur.",
   JAVA_FAILED: "Java n'a pas pu démarrer.",
+  JAVA_TOO_OLD: 'Ce Java est trop ancien pour cette version de Minecraft.',
+  GAME_CRASHED: "Le jeu s'est arrêté à cause d'une erreur (voir le journal).",
   LOADER_INSTALL_FAILED: "L'installation du chargeur de mods a échoué.",
   LAUNCH_FAILED: "Le jeu n'a pas pu démarrer.",
   CANCELLED: 'Opération annulée.',

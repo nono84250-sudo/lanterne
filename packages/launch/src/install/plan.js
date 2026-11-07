@@ -108,6 +108,9 @@ async function prepare(opts = {}) {
   if (!root || typeof root !== 'string') throw new LaunchError('INVALID_OPTION', 'dossier (root) manquant');
   if (!opts.version) throw new LaunchError('INVALID_OPTION', 'version manquante');
   const L = layout(root);
+  // Annuler aussi pendant prepare() (qui peut télécharger l'installeur Forge) : control, signal ou « annuler ».
+  if (!opts.control && opts.annuler && typeof opts.annuler.cancel === 'function') opts = { ...opts, control: opts.annuler };
+  if (!opts.control && !opts.signal && opts.annuler instanceof AbortSignal) opts = { ...opts, signal: opts.annuler };
   const net = { allowedHosts: opts.allowedHosts, timeout: opts.timeout, signal: opts.control ? opts.control.signal : opts.signal };
   const ctx = { root: L.root, offline: !!opts.offline, net, control: opts.control };
   const plat = currentPlatform();
@@ -152,7 +155,8 @@ async function prepare(opts = {}) {
   let clientJar = baseJar;
   let copyJar = null;
   if (id !== baseId) {
-    const jarId = checkId(version.jar && version.jar !== id ? version.jar : id);
+    // Un profil ne peut désigner que le jar de base (vérifié) ; sinon, copie comme le launcher officiel.
+    const jarId = checkId(version.jar && version.jar === baseId ? baseId : id);
     if (jarId === id) {
       // Comme le launcher officiel : copie du jar de base sous le nom de la version moddée.
       clientJar = path.join(L.versions, id, `${id}.jar`);
@@ -184,7 +188,7 @@ async function prepare(opts = {}) {
     if (!SAFE_HASH.test(hash)) throw new LaunchError('MANIFEST_INVALID', `asset ${name}`);
     const sub = hash.slice(0, 2);
     const p = path.join(L.assets, 'objects', sub, hash);
-    assetObjects.push({ name, hash, path: p });
+    assetObjects.push({ name, hash, path: p, size: Number.isSafeInteger(obj.size) ? obj.size : undefined });
     files.push({ url: `${RESOURCES_URL}${sub}/${hash}`, path: p, sha1: hash, size: obj.size, stage: 'sons et textures' });
   }
 

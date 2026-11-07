@@ -28,7 +28,14 @@ function createControl(parent = null) {
     async wait() {
       for (;;) {
         if (ac.signal.aborted) throw new LaunchError('CANCELLED');
-        if (parent) await parent.wait();
+        if (parent) {
+          // Attente du parent, interrompue si CE contrôle est annulé (ex. erreur pendant une pause).
+          await new Promise((resolve, reject) => {
+            const onAbort = () => reject(new LaunchError('CANCELLED'));
+            ac.signal.addEventListener('abort', onAbort, { once: true });
+            Promise.resolve(parent.wait()).then(resolve, reject).finally(() => ac.signal.removeEventListener('abort', onAbort));
+          });
+        }
         if (ac.signal.aborted) throw new LaunchError('CANCELLED');
         if (!paused) return;
         await new Promise((resolve) => waiters.push(resolve));

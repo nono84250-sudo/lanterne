@@ -103,8 +103,14 @@ test('héritage depuis le disque (hors-ligne), boucle refusée', async () => {
   assert.equal(v.mainClass, 'B');
   assert.equal(v.libraries.length, 2);
   await assert.rejects(resolveVersion('boucle', { root, offline: true }), { code: 'MANIFEST_INVALID' });
-  await assert.rejects(resolveVersion('absent', { root, offline: true }), { code: 'VERSION_NOT_FOUND' });
   await assert.rejects(getVersionManifest({ root, offline: true }), { code: 'OFFLINE' });
+  // Hors-ligne sans liste des versions en cache : on ne sait pas, c'est un manque d'Internet.
+  await assert.rejects(resolveVersion('absent', { root, offline: true }), { code: 'OFFLINE' });
+  // Avec la liste en cache, une version inconnue est bien « introuvable ».
+  await fsp.mkdir(path.join(root, 'cache'), { recursive: true });
+  await fsp.writeFile(path.join(root, 'cache', 'version_manifest_v2.json'), JSON.stringify({ latest: { release: 'base' }, versions: [{ id: 'base', url: 'https://x/base.json' }] }));
+  await assert.rejects(resolveVersion('absent', { root, offline: true }), { code: 'VERSION_NOT_FOUND' });
+  await assert.rejects(resolveVersion('base2', { root, offline: true }), { code: 'VERSION_NOT_FOUND' });
   await fsp.rm(root, { recursive: true, force: true });
 });
 

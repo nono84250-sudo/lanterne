@@ -142,6 +142,7 @@ function mirrorUrl(raw) {
 /** Lit tout le corps en mémoire, avec plafond (pour les petits JSON). */
 async function getBuffer(url, opts = {}) {
   const maxBytes = opts.maxBytes || 64 * 1024 * 1024;
+  const deadline = Date.now() + (opts.maxDuration || 120_000); // échéance totale (serveur trop lent)
   const r = await secureGet(url, opts);
   try {
     if (r.res.status !== 200) {
@@ -154,6 +155,7 @@ async function getBuffer(url, opts = {}) {
     try {
       for await (const chunk of r.res.body) {
         r.tick();
+        if (Date.now() > deadline) throw new LaunchError('TIMEOUT', hostOf(r.url), { url: r.url });
         total += chunk.length;
         if (total > maxBytes) throw new LaunchError('TOO_LARGE', hostOf(r.url), { url: r.url });
         chunks.push(Buffer.from(chunk));

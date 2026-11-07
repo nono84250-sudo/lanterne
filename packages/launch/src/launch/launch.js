@@ -38,6 +38,10 @@ function anonymize(text, info = {}) {
   if (info.name && /^[A-Za-z0-9_]{3,16}$/.test(info.name)) {
     s = s.replace(new RegExp(`(?<![A-Za-z0-9_])${info.name}(?![A-Za-z0-9_])`, 'g'), '<joueur>');
   }
+  for (const k of ['xuid', 'clientId']) {
+    const v = info[k] && String(info[k]);
+    if (v && v !== '0' && v.length >= 4) s = s.split(v).join(`<${k}>`);
+  }
   let user = '';
   try { user = os.userInfo().username; } catch { /* rien */ }
   if (user && user.length >= 3 && /^[\w.-]+$/.test(user)) {
@@ -55,10 +59,12 @@ function anonymize(text, info = {}) {
 class GameProcess extends EventEmitter {
   constructor(child, secrets, info) {
     super();
-    this.child = child;
+    // Le processus n'est pas énumérable : console.log(jeu) n'affiche pas ses arguments (donc pas le jeton).
+    Object.defineProperty(this, 'child', { value: child, enumerable: false });
     this.pid = child.pid;
+    this.stopRequested = false;
     Object.defineProperty(this, 'secrets', { value: secrets, enumerable: false });
-    Object.defineProperty(this, '_who', { value: { name: info.playerName, uuid: info.playerUuid }, enumerable: false });
+    Object.defineProperty(this, '_who', { value: { name: info.playerName, uuid: info.playerUuid, xuid: info.xuid, clientId: info.clientId }, enumerable: false });
     this.info = { id: info.id, javaPath: info.javaPath, pid: info.pid };
     this.lines = [];
     this.exited = false;
@@ -77,7 +83,17 @@ class GameProcess extends EventEmitter {
   /** Arrête le jeu (doucement, puis de force après 10 s). */
   arreter() {
     if (this.exited) return;
-    try { this.child.kill(); } catch { /* déjà fini */ }
+    this.stopRequested = true;
+    if (process.platform === 'win32') {
+      // Sous Windows, kill() force l'arrêt tout de suite : on demande d'abord la fermeture
+      // de la fenêtre (comme cliquer sur la croix), pour que le monde soit sauvegardé.
+      try {
+        const tk = spawn('taskkill', ['/PID', String(this.pid), '/T'], { shell: false, windowsHide: true, stdio: 'ignore' });
+        tk.on('error', () => { try { this.child.kill(); } catch { /* rien */ } });
+      } catch { try { this.child.kill(); } catch { /* rien */ } }
+    } else {
+      try { this.child.kill(); } catch { /* déjà fini */ }
+    }
     const t = setTimeout(() => { if (!this.exited) try { this.child.kill('SIGKILL'); } catch { /* rien */ } }, 10_000);
     if (t.unref) t.unref();
   }
@@ -164,6 +180,14 @@ function lineSplitter(onLine) {
   };
 }
 
+/** Erreur système sans ses arguments (spawnargs contient le jeton). */
+function cleanCause(err) {
+  if (!err || typeof err !== 'object') return err;
+  const e = new Error(String(err.message || '').slice(0, 200));
+  e.code = err.code; e.errno = err.errno; e.syscall = err.syscall;
+  return e;
+}
+
 // Empreintes déjà calculées : chemin → { size, mtimeMs, sha1 } (évite de tout relire à chaque lancement).
 const hashCache = new Map();
 async function cachedSha1(file) {
@@ -222,7 +246,7 @@ async function checkReady(plan, opts) {
     }
     const { major } = await probeJava(plan.java.executable);
     const min = plan.java.minMajor || 8;
-    if (major < min) throw new LaunchError('JAVA_FAILED', `Java ${major} trop ancien, Java ${min} minimum`);
+    if (major < min) throw new LaunchError('JAVA_TOO_OLD', `Java ${major}, il faut Java ${min} ou plus récent`);
   }
 }
 
@@ -236,6 +260,8 @@ async function checkReady(plan, opts) {
 async function launch(opts = {}) {
   let plan = opts.plan;
   if (!plan) plan = await prepare(opts);
+  // Dossier d'instance donné au lancement : il remplace celui du plan.
+  if (opts.plan && (opts.gameDir || opts.dossierInstance)) plan = { ...plan, gameDir: path.resolve(String(opts.gameDir || opts.dossierInstance)) };
   await checkReady(plan, opts);
   await extractNatives(plan);
   try { await fsp.mkdir(plan.gameDir, { recursive: true }); } catch (err) { throw fromSystemError(err, plan.gameDir); }
@@ -254,10 +280,11 @@ async function launch(opts = {}) {
         env: opts.env ? { ...process.env, ...opts.env } : process.env,
       });
     } catch (err) {
-      return reject(new LaunchError('LAUNCH_FAILED', err && err.code, { cause: err }));
+      return reject(new LaunchError('LAUNCH_FAILED', err && err.code, { cause: cleanCause(err) }));
     }
     const game = new GameProcess(child, built.secrets, {
       id: plan.id, javaPath: built.javaPath, pid: child.pid, playerName: built.account.name, playerUuid: built.account.uuid,
+      xuid: built.account.xuid, clientId: built.account.clientId,
     });
     // La commande, sans jeton ni données personnelles, pour le débogage.
     game.command = anonymize(maskSecrets([built.javaPath, ...built.args].join(' '), built.secrets), game._who);
@@ -275,7 +302,7 @@ async function launch(opts = {}) {
       resolve(game);
     });
     child.on('error', (err) => {
-      const e = new LaunchError(err.code === 'ENOENT' ? 'JAVA_MISSING' : 'LAUNCH_FAILED', err.code, { cause: err });
+      const e = new LaunchError(err.code === 'ENOENT' ? 'JAVA_MISSING' : 'LAUNCH_FAILED', err.code, { cause: cleanCause(err) });
       if (!spawned) return reject(e);
       game.emit('erreur', e);
     });
@@ -284,6 +311,10 @@ async function launch(opts = {}) {
       game.exited = true;
       game.exitCode = code;
       game._log(`Fin du jeu (code ${code}${signal ? ', ' + signal : ''})`, { source: 'lanceur', flux: 'stdout' });
+      // Plantage (et pas un arrêt demandé) : erreur claire pour le launcher.
+      if (!game.stopRequested && code !== 0 && code !== null && game.listenerCount('erreur') > 0) {
+        game.emit('erreur', new LaunchError('GAME_CRASHED', `code ${code}`));
+      }
       game.emit('fermeture', code, signal);
       game.emit('exit', code, signal);
     });
