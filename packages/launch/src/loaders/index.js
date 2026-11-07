@@ -72,8 +72,12 @@ async function completeLibrary(lib, net) {
   const url = fixRepoUrl(lib.url) + m.path;
   let sha1 = typeof lib.sha1 === 'string' && /^[0-9a-f]{40}$/i.test(lib.sha1) ? lib.sha1.toLowerCase() : null;
   if (!sha1) sha1 = await fetchSha1(url, net);
+  // Ancien Forge : empreintes listées dans « checksums » (l'une d'elles doit correspondre).
+  const alts = Array.isArray(lib.checksums) ? lib.checksums.filter((c) => typeof c === 'string' && /^[0-9a-f]{40}$/i.test(c)).map((c) => c.toLowerCase()) : [];
+  if (!sha1 && alts.length) sha1 = alts.shift();
   if (!sha1) throw new LaunchError('INTEGRITY', `pas d'empreinte publiée pour ${lib.name}`);
   const artifact = { path: m.path, url, sha1 };
+  if (alts.length) artifact.sha1Alt = alts;
   if (typeof lib.size === 'number') artifact.size = lib.size;
   const out = { name: lib.name, downloads: { artifact } };
   if (lib.rules) out.rules = lib.rules;
@@ -184,6 +188,16 @@ async function resolveForgeVersion(kind, mc, loaderVersion, net) {
     if (!full) throw new LaunchError('LOADER_NOT_FOUND', `Forge ${lv} pour ${mc}`);
     return { full, lv, installerUrl: `${FORGE_MAVEN}net/minecraftforge/forge/${full}/forge-${full}-installer.jar` };
   }
+  if (mc === '1.20.1') {
+    // NeoForge 1.20.1 : publié sous l'ancien nom « net.neoforged:forge ».
+    const xml1 = await getText(`${NEOFORGE_MAVEN}net/neoforged/forge/maven-metadata.xml`, net);
+    const all1 = mavenVersions(xml1).filter((v) => v.startsWith('1.20.1-'));
+    if (!all1.length) throw new LaunchError('LOADER_NOT_FOUND', 'NeoForge pour 1.20.1');
+    const lv1 = loaderVersion || all1.map((v) => v.slice(7)).sort(compareDotted).pop();
+    const full1 = `1.20.1-${lv1}`;
+    if (!all1.includes(full1)) throw new LaunchError('LOADER_NOT_FOUND', `NeoForge ${lv1} pour 1.20.1`);
+    return { full: full1, lv: lv1, installerUrl: `${NEOFORGE_MAVEN}net/neoforged/forge/${full1}/forge-${full1}-installer.jar` };
+  }
   const xml = await getText(`${NEOFORGE_MAVEN}net/neoforged/neoforge/maven-metadata.xml`, net);
   const prefix = neoforgePrefix(mc);
   const all = mavenVersions(xml).filter((v) => v.startsWith(prefix));
@@ -203,10 +217,13 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
   const offlineFind = async () => {
     const id = await findInstalled(opts.root, (n) => kind === 'forge'
       ? (n.startsWith(`${mc}-forge`) && (!loaderVersion || n.includes(loaderVersion)))
-      : (n.startsWith('neoforge-') && n.slice(9).startsWith(loaderVersion || neoforgePrefix(mc))));
+      : mc === '1.20.1'
+        ? (n.startsWith('1.20.1-forge-47.1.') && (!loaderVersion || n.endsWith(loaderVersion)))
+        : (n.startsWith('neoforge-') && n.slice(9).startsWith(loaderVersion || neoforgePrefix(mc))));
     if (!id) return null;
     const marker = await readJsonFile(markerName(id));
-    return marker ? { versionId: id, loaderVersion: marker.loaderVersion, forge: marker.forge } : null;
+    if (!marker || (marker.loader && marker.loader !== kind)) return null;
+    return { versionId: id, loaderVersion: marker.loaderVersion, forge: marker.forge };
   };
   if (opts.offline) {
     const r = await offlineFind();
@@ -267,7 +284,7 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
           libs.push({ name: lib.name, downloads: { artifact: { path: coord.path, url: '', sha1: universalSha1, size: entry.uncompressedSize } } });
           continue;
         }
-        const clean = { name: lib.name, url: lib.url };
+        const clean = { name: lib.name, url: lib.url, checksums: lib.checksums };
         if (lib.rules) clean.rules = lib.rules;
         if (lib.natives) { clean.natives = lib.natives; clean.extract = lib.extract; }
         libs.push(lib.natives ? lib : clean);
@@ -295,7 +312,7 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
     version._lanterne = { loader: kind, loaderVersion: info.lv, complete: true };
     await writeJsonFile(path.join(L.versions, id, `${id}.json`), version);
     const result = { versionId: id, loaderVersion: info.lv, forge: forge.processors.length ? forge : null };
-    await writeJsonFile(markerName(id), result);
+    await writeJsonFile(markerName(id), { ...result, loader: kind });
     return result;
   } finally {
     await zip.close();

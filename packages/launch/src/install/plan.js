@@ -66,6 +66,7 @@ function entry(name, a, L, extra) {
     url: a.url ? String(a.url) : null,
     sha1,
     size: typeof a.size === 'number' ? a.size : undefined,
+    sha1Alt: Array.isArray(a.sha1Alt) ? a.sha1Alt.filter((h) => SAFE_HASH.test(h)) : undefined,
     ...extra,
   };
 }
@@ -161,7 +162,7 @@ async function prepare(opts = {}) {
   const libraries = resolveLibraries(version, L, plat, features);
   const generated = [];
   for (const lib of libraries) {
-    if (lib.url) files.push({ url: lib.url, path: lib.path, sha1: lib.sha1, size: lib.size, stage: 'librairies' });
+    if (lib.url) files.push({ url: lib.url, path: lib.path, sha1: lib.sha1, sha1Alt: lib.sha1Alt, size: lib.size, stage: 'librairies' });
     else generated.push(lib); // fourni par l'installeur du chargeur
   }
   if (ld.forge) {

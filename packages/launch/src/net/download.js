@@ -34,7 +34,15 @@ async function isFileValid(f, opts = {}) {
   if (!st.isFile()) return false;
   if (typeof f.size === 'number' && f.size >= 0 && st.size !== f.size) return false;
   if (opts.quick || !f.sha1) return true;
-  return (await sha1File(f.path)) === f.sha1.toLowerCase();
+  return hashMatches(f, await sha1File(f.path));
+}
+
+/** L'empreinte correspond-elle (ou une des empreintes acceptées) ? */
+function hashMatches(f, digest) {
+  if (!f.sha1) return true;
+  if (!digest) return false;
+  if (digest === f.sha1.toLowerCase()) return true;
+  return Array.isArray(f.sha1Alt) && f.sha1Alt.some((h) => String(h).toLowerCase() === digest);
 }
 
 function isRetryable(err) {
@@ -135,7 +143,7 @@ async function downloadOnce(file, opts = {}) {
       throw new LaunchError(written < expectedSize ? 'NETWORK' : 'INTEGRITY', `${path.basename(file.path)} incomplet (${written}/${expectedSize})`, { url: r.url, file: file.path });
     }
     const digest = hash.digest('hex');
-    if (file.sha1 && digest !== file.sha1.toLowerCase()) {
+    if (file.sha1 && !hashMatches(file, digest)) {
       await fsp.rm(part, { force: true }).catch(() => {});
       throw new LaunchError('INTEGRITY', path.basename(file.path), { url: r.url, file: file.path });
     }

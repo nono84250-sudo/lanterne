@@ -33,7 +33,7 @@ async function main() {
     onLog: (l) => { if (process.env.VERBOSE) console.log(l); },
   });
   console.log(`[install] terminé en ${((Date.now() - t0) / 1000).toFixed(0)} s`);
-  const game = await lib.launch({ plan, account: demo ? { type: 'demo', name: 'Demo_Player' } : { type: 'offline', name: 'Testeur' }, memory: { max: 2048 } });
+  const game = await lib.launch({ plan, account: demo ? { type: 'demo', name: 'Demo_Player' } : { type: 'offline', name: 'Testeur' }, memory: { max: 2048 }, jvmArgs: process.env.SMOKE_JVM ? process.env.SMOKE_JVM.split(' ') : undefined });
   const tl = Date.now();
   let reached = false;
   let loaderSeen = false;
