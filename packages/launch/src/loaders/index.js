@@ -7,6 +7,7 @@
  */
 
 const fsp = require('node:fs/promises');
+const { rename: fsRename } = require('../fsutil');
 const path = require('node:path');
 const { LaunchError, fromSystemError } = require('../errors');
 const { getJson, getText } = require('../net/http');
@@ -185,7 +186,8 @@ async function resolveForgeVersion(kind, mc, loaderVersion, net) {
     if (!all.length) throw new LaunchError('LOADER_NOT_FOUND', `Forge pour ${mc}`);
     let lv = loaderVersion;
     if (!lv) {
-      const promos = await getJson(FORGE_PROMOS, net);
+      // files.minecraftforge.net en panne : on prend la plus récente du dépôt maven.
+      const promos = await getJson(FORGE_PROMOS, net).catch((err) => { if (isNetworkError(err) || (err && err.code === 'HTTP_STATUS')) return null; throw err; });
       lv = promos && promos.promos && (promos.promos[`${mc}-recommended`] || promos.promos[`${mc}-latest`]);
       if (!lv) lv = all.map((v) => v.slice(mc.length + 1).split('-')[0]).sort(compareDotted).pop();
     }
@@ -344,7 +346,7 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
       return { versionId: id, loaderVersion: marker.loaderVersion, forge: forge.processors.length ? forge : null };
     }
 
-    const tmpDir = path.join(L.cache, 'tmp', `${kind}-${info.full}-${process.pid}`);
+    const tmpDir = path.join(L.cache, 'tmp', `${kind}-${info.full}-${process.pid}-${require('node:crypto').randomBytes(6).toString('hex')}`);
     try {
       await fsp.rm(tmpDir, { recursive: true, force: true });
       if (legacy) {
@@ -354,7 +356,7 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
         if (!entry) throw new LaunchError('LOADER_INSTALL_FAILED', 'jar universal absent');
         await zip.extractTo(tmpDir, { filter: (n) => n === legacy.filePath });
         await fsp.mkdir(path.dirname(target), { recursive: true });
-        await fsp.rename(path.join(tmpDir, ...legacy.filePath.split('/')), target);
+        await fsRename(path.join(tmpDir, ...legacy.filePath.split('/')), target);
         const universalSha1 = await sha1File(target);
         const libs = [];
         for (const lib of Array.isArray(version.libraries) ? version.libraries : []) {
@@ -380,7 +382,7 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
           const relp = path.relative(tmpDir, f);
           const target = path.join(L.libraries, relp);
           await fsp.mkdir(path.dirname(target), { recursive: true });
-          await fsp.rename(f, target).catch(async (err) => {
+          await fsRename(f, target).catch(async (err) => {
             // Fichier verrouillé (instance en cours sous Windows) mais identique : on le garde.
             if ((await sha1File(target)) === (await sha1File(f))) return;
             throw err;

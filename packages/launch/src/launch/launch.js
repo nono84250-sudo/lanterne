@@ -80,8 +80,12 @@ class GameProcess extends EventEmitter {
     this.emit('log', masked, meta);
   }
 
-  /** Arrête le jeu (doucement, puis de force après 10 s). */
-  arreter() {
+  /**
+   * Arrête le jeu : doucement (le monde est sauvegardé), puis de force après
+   * `delaiForce` ms (30 s par défaut). arreter({ force: true }) : tout de suite.
+   */
+  arreter(opts = {}) {
+    if (opts.force) { this.stopRequested = true; try { this.child.kill('SIGKILL'); } catch { /* rien */ } return; }
     if (this.exited) return;
     this.stopRequested = true;
     if (process.platform === 'win32') {
@@ -95,11 +99,12 @@ class GameProcess extends EventEmitter {
     } else {
       try { this.child.kill(); } catch { /* déjà fini */ }
     }
-    const t = setTimeout(() => { if (!this.exited) try { this.child.kill('SIGKILL'); } catch { /* rien */ } }, 10_000);
+    const delay = Number.isFinite(opts.delaiForce ?? opts.forceAfter) ? (opts.delaiForce ?? opts.forceAfter) : 30_000;
+    const t = setTimeout(() => { if (!this.exited) try { this.child.kill('SIGKILL'); } catch { /* rien */ } }, delay);
     if (t.unref) t.unref();
   }
 
-  stop() { this.arreter(); }
+  stop(opts) { this.arreter(opts); }
 
   /**
    * Journal prêt à envoyer au support : jamais de jeton, et par défaut sans

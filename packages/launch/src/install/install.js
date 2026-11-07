@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+const { rename: fsRename } = require('../fsutil');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { LaunchError, fromSystemError } = require('../errors');
@@ -63,7 +64,7 @@ async function safeCopy(from, to) {
   try {
     await fsp.mkdir(path.dirname(to), { recursive: true });
     await fsp.copyFile(from, part, fs.constants.COPYFILE_EXCL);
-    await fsp.rename(part, to);
+    await fsRename(part, to);
   } catch (err) {
     await fsp.rm(part, { force: true }).catch(() => {});
     throw fromSystemError(err, to);

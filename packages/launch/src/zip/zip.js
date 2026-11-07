@@ -10,6 +10,7 @@
 
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+const { rename: fsRename } = require('../fsutil');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const crypto = require('node:crypto');
@@ -306,7 +307,7 @@ class ZipArchive {
         // Création exclusive (jamais à travers un lien), droits normaux uniquement
         // (jamais SUID ni exécutable venant de l'archive).
         await pipeline(...streams, fs.createWriteStream(part, { mode: 0o644, flags: 'wx' }));
-        await fsp.rename(part, target);
+        await fsRename(part, target);
       } catch (err) {
         await fsp.rm(part, { force: true }).catch(() => {});
         if (err instanceof LaunchError) throw err;
