@@ -51,13 +51,23 @@ async function processorsDone(plan) {
   return true;
 }
 
-async function runProcessors(plan, { javaPath, control, onLog }) {
+async function runProcessors(plan, opts) {
+  if (!plan.forge || !plan.forge.processors.length) return;
+  const tmp = path.join(layout(plan.root).cache, 'tmp', `processors-${plan.id}-${process.pid}-${require('node:crypto').randomBytes(6).toString('hex')}`);
+  try {
+    return await runProcessorsIn(plan, opts, tmp);
+  } finally {
+    // Toujours nettoyé, même après une erreur ou une annulation.
+    await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function runProcessorsIn(plan, { javaPath, control, onLog }, tmp) {
   const forge = plan.forge;
   if (!forge || !forge.processors.length) return;
   if (await processorsDone(plan)) return;
   const L = layout(plan.root);
   const log = typeof onLog === 'function' ? (m) => { try { onLog(m); } catch { /* rien */ } } : () => {};
-  const tmp = path.join(L.cache, 'tmp', `processors-${plan.id}-${process.pid}-${require('node:crypto').randomBytes(6).toString('hex')}`);
   await fsp.rm(tmp, { recursive: true, force: true });
   await fsp.mkdir(tmp, { recursive: true });
 
