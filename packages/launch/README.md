@@ -61,7 +61,7 @@ Si un serveur officiel est en panne (erreur 5xx), le moteur joue avec ce qui est
 
 Autres options : `memory: { min, max }` (Mo), `quickPlay: { singleplayer | multiplayer | realms }`, `resolution: { width, height }`, `jvmArgs`, `gameArgs`, `onLog`.
 
-- Avant chaque lancement, le jeu, les bibliothèques et les fichiers essentiels de Java sont contrôlés par empreinte SHA-1 (mis en cache, rapide après le premier lancement).
+- Avant chaque lancement, le jeu, les bibliothèques et tous les fichiers du Java automatique (sauf la documentation) sont contrôlés par empreinte SHA-1 (mis en cache, rapide après le premier lancement).
   `fastLaunch: true` se contente des tailles. Un fichier abîmé donne `NOT_INSTALLED` : il suffit d'appeler `repair()`.
 - Si `jvmArgs` est donné, les options Java conseillées par Mojang (`default-user-jvm`) ne sont pas ajoutées.
 - La connexion Microsoft n'est pas faite par ce moteur : le launcher la fait avec **son propre identifiant d'application** (client ID).
@@ -81,7 +81,7 @@ Toutes les erreurs sont des `LaunchError` avec un `code` précis et un message c
 - Extracteur ZIP maison : refuse `../`, chemins absolus, `C:\`, caractère nul, doublons ; ignore les liens symboliques ;
   n'applique jamais les droits spéciaux ; s'arrête si un fichier dépasse la taille annoncée ; plafonne le total (bombe ZIP).
 - Java démarré avec une **liste d'arguments** (jamais de ligne de commande interprétée).
-- Jeton du joueur masqué avant d'arriver dans les journaux ; il n'est jamais renvoyé par l'API.
+- Jeton du joueur masqué avant d'arriver dans les journaux et dans `jeu.command`. Seul `buildArgs()` (outil avancé) le contient forcément dans `args` et `secrets` : **ne jamais journaliser son résultat**.
 - Options Java venant des fichiers téléchargés : **liste blanche** (seules les options connues de Mojang et des chargeurs passent ; `-javaagent`, `@fichier`, `-XX:OnError`, `-Dminecraft.api.*`, `-Dlog4j.configurationFile=https://…` sont refusées et signalées dans le journal).
 - Forge / NeoForge : les programmes d'installation officiels sont lancés localement ; le seul qui télécharge
   (cartes de noms Mojang) est remplacé par le téléchargeur sécurisé.
@@ -92,7 +92,7 @@ Toutes les erreurs sont des `LaunchError` avec un `code` précis et un message c
 npm test            # tests automatiques (faux serveur HTTPS local, ZIP piégés, coupures, disque plein…)
 node test/live/smoke.js 1.20.1 forge     # essai réel : installe et lance jusqu'au menu
 npm run test:live                        # toute la matrice d'essais réels (long)
-node test/live/compare-mclc.js           # commande identique à minecraft-launcher-core 3.18 (classpath, options du jeu)
+node test/live/compare-mclc.js           # commande équivalente à minecraft-launcher-core 3.18 (1.8.9 → 1.21.11 + Fabric ; classpath et options du jeu)
 ```
 
 ## Licence
