@@ -157,7 +157,10 @@ function mergeVersion(parent, child) {
   }
   // Un « logging » vide chez l'enfant (Forge 1.12) ne doit pas effacer celui du parent.
   out.logging = child.logging && Object.keys(child.logging).length ? child.logging : parent.logging;
-  out.jar = child.jar || parent.jar || parent.id;
+  // Jar du jeu : seulement si l'enfant en nomme un (ancien Forge : « jar: 1.8.9 »).
+  // Sinon, comme le launcher officiel, le jar de base est copié sous le nom de
+  // la version moddée (Forge récent en a besoin pour ignorer le bon fichier).
+  out.jar = child.jar || null;
   out._chain = [...(parent._chain || [parent.id]), child.id];
   return out;
 }
