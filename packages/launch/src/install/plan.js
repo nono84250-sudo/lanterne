@@ -13,6 +13,7 @@ const { layout, getVersionManifest, resolveAlias, resolveVersion, readJsonFile, 
 const { downloadFile, isFileValid } = require('../net/download');
 const { ensureLoader, normalizeLoader, fixRepoUrl } = require('../loaders');
 const { componentFor, planRuntime } = require('../java/runtime');
+const { findInPath } = require('../fsutil');
 
 const RESOURCES_URL = 'https://resources.download.minecraft.net/';
 const SAFE_HASH = /^[0-9a-f]{40}$/;
@@ -210,7 +211,10 @@ async function prepare(opts = {}) {
     if (j.includes('\0') || /^-/.test(j)) throw new LaunchError('INVALID_OPTION', 'java');
     // Un nom nu (« java ») est cherché dans le PATH par le système ; sinon chemin absolu.
     const bare = !/[\\/]/.test(j);
-    java = { component: null, executable: bare ? j : path.resolve(j), bare, auto: false, minMajor: requiredJava(version) };
+    // Nom nu : résolu tout de suite dans le PATH (jamais le dossier courant), pour que les
+    // installeurs Forge et le jeu utilisent exactement le même Java.
+    const found = bare ? await findInPath(j) : null;
+    java = { component: null, executable: found || (bare ? j : path.resolve(j)), bare: bare && !found, auto: false, minMajor: requiredJava(version) };
   } else {
     const component = componentFor(version);
     const rt = await planRuntime(component, { runtimeDir: L.runtime, offline: ctx.offline, net });
