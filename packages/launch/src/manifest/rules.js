@@ -20,9 +20,15 @@ function archMatches(ruleArch, arch) {
   return false;
 }
 
+/**
+ * Mojang n'utilise que des motifs très simples (« ^10\\. », « ^10\\.5\\.\\d$ »).
+ * On n'accepte que ceux-là : pas de groupes ni de répétitions, donc aucun
+ * risque de blocage (ReDoS) avec un JSON piégé.
+ */
 function safeRegexTest(pattern, value) {
-  if (typeof pattern !== 'string' || pattern.length > 200) return false;
-  try { return new RegExp(pattern).test(value); } catch { return false; }
+  if (typeof pattern !== 'string' || pattern.length > 64) return false;
+  if (!/^\^?(?:[0-9A-Za-z_ .-]|\\[.d])*\$?$/.test(pattern)) return false;
+  try { return new RegExp(pattern).test(String(value).slice(0, 64)); } catch { return false; }
 }
 
 /** Compare deux versions « 10.0.17134 » morceau par morceau. */

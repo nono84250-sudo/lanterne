@@ -12,7 +12,7 @@
  *   jeu.on('journal', console.log); jeu.on('fermeture', (code) => …); jeu.arreter();
  */
 
-const { LaunchError, MESSAGES } = require('./errors');
+const { LaunchError, MESSAGES, wrap } = require('./errors');
 const { createControl } = require('./net/control');
 const { DEFAULT_ALLOWED_HOSTS } = require('./net/http');
 const { prepare } = require('./install/plan');
@@ -33,16 +33,20 @@ async function listVersions(opts = {}) {
 async function verifier(opts) { return verify(opts && opts.files ? opts : await prepare({ ...opts, offline: opts.offline })); }
 async function reparer(opts, more) { return repair(opts && opts.files ? opts : await prepare(opts), more); }
 
+const api = {
+  prepare: wrap(prepare),
+  install: wrap(install),
+  launch: wrap(launch),
+  verify: wrap(verifier),
+  repair: wrap(reparer),
+  listVersions: wrap(listVersions),
+};
+
 module.exports = {
-  prepare,
-  install,
-  launch,
-  verify: verifier,
-  repair: reparer,
-  verifier,
-  reparer,
+  ...api,
+  verifier: api.verify,
+  reparer: api.repair,
   createControl,
-  listVersions,
   buildArgs,
   maskSecrets,
   offlineUuid,

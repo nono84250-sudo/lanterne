@@ -3,6 +3,8 @@
 const { LaunchError } = require('../errors');
 
 const SAFE = /^[A-Za-z0-9._\-+]+$/;
+// Noms interdits par Windows (CON, NUL, COM1…), avec ou sans extension.
+const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
 
 /**
  * « groupe:artefact:version[:classifier][@ext] » → morceaux + chemin relatif.
@@ -18,10 +20,10 @@ function parseMaven(coord) {
   if (parts.length < 3 || parts.length > 4) throw new LaunchError('MANIFEST_INVALID', `bibliothèque ${coord}`);
   const [group, artifact, version, classifier] = parts;
   for (const p of [artifact, version, classifier, ext].filter((x) => x !== undefined)) {
-    if (!SAFE.test(p) || p === '.' || p === '..') throw new LaunchError('MANIFEST_INVALID', `bibliothèque ${coord}`);
+    if (!SAFE.test(p) || /^\.+$/.test(p) || p.endsWith('.') || RESERVED.test(p)) throw new LaunchError('MANIFEST_INVALID', `bibliothèque ${coord}`);
   }
   for (const g of group.split('.')) {
-    if (!SAFE.test(g) || g === '..' || g === '') throw new LaunchError('MANIFEST_INVALID', `bibliothèque ${coord}`);
+    if (!SAFE.test(g) || /^\.*$/.test(g) || RESERVED.test(g)) throw new LaunchError('MANIFEST_INVALID', `bibliothèque ${coord}`);
   }
   const file = `${artifact}-${version}${classifier ? '-' + classifier : ''}.${ext}`;
   const path = `${group.replace(/\./g, '/')}/${artifact}/${version}/${file}`;
@@ -45,9 +47,11 @@ function safeRelPath(p) {
   if (n.startsWith('/') || /^[a-zA-Z]:/.test(n) || n.includes(':')) throw new LaunchError('MANIFEST_INVALID', `chemin interdit ${p}`);
   const parts = n.split('/');
   for (const s of parts) {
-    if (s === '' || s === '.' || /^[ .]+$/.test(s) || /[<>"|?*\x00-\x1f]/.test(s)) throw new LaunchError('MANIFEST_INVALID', `chemin interdit ${p}`);
+    if (s === '' || s === '.' || /^[ .]+$/.test(s) || /[<>"|?*;\x00-\x1f]/.test(s) || /[ .]$/.test(s) || RESERVED.test(s)) {
+      throw new LaunchError('MANIFEST_INVALID', `chemin interdit ${p}`);
+    }
   }
   return parts.join('/');
 }
 
-module.exports = { parseMaven, libraryKey, safeRelPath };
+module.exports = { parseMaven, libraryKey, safeRelPath, RESERVED };

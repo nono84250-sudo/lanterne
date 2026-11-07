@@ -25,7 +25,7 @@ function fakePlan(root, version, extra = {}) {
     generated: [],
     assetIndex: { id: '1.8', virtual: false, mapToResources: false, objects: [] },
     logging: { argument: '-Dlog4j.configurationFile=${path}', path: path.join(root, 'assets', 'log_configs', 'client.xml') },
-    java: { executable: process.execPath },
+    java: { executable: process.execPath, auto: true },
     missing: [],
     files: [],
     ...extra,
@@ -124,7 +124,7 @@ test('lancement réel d\'un processus : journal, jeton jamais visible, fermeture
 
 test('Java absent : erreur claire, jamais de plantage', async () => {
   const root = await tmpDir();
-  const plan = fakePlan(root, { id: 'x', mainClass: 'M', arguments: { jvm: [], game: [] } }, { java: { executable: path.join(root, 'pas-de-java') } });
+  const plan = fakePlan(root, { id: 'x', mainClass: 'M', arguments: { jvm: [], game: [] } }, { java: { executable: path.join(root, 'pas-de-java'), auto: true } });
   await assert.rejects(launch({ plan, account: { name: 'Steve' } }), { code: 'JAVA_MISSING' });
   await fsp.rm(root, { recursive: true, force: true });
 });

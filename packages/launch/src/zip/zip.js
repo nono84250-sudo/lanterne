@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const zlib = require('node:zlib');
+const crypto = require('node:crypto');
 const { pipeline } = require('node:stream/promises');
 const { Transform } = require('node:stream');
 const { LaunchError, fromSystemError } = require('../errors');
@@ -55,7 +56,10 @@ function safeParts(name) {
     if (p === '..') throw new LaunchError('ZIP_UNSAFE', `sortie du dossier : ${name}`);
     // Windows ignore les points/espaces finaux : « ..  » ou « .. . » = « .. »
     if (/^[ .]+$/.test(p)) throw new LaunchError('ZIP_UNSAFE', `sortie du dossier : ${name}`);
-    if (/[<>"|?*\x00-\x1f]/.test(p)) throw new LaunchError('ZIP_UNSAFE', `caractère interdit : ${name}`);
+    if (/[<>"|?*;\x00-\x1f]/.test(p)) throw new LaunchError('ZIP_UNSAFE', `caractère interdit : ${name}`);
+    // Windows retire les points/espaces finaux et réserve CON, NUL, COM1… : refusés.
+    if (/[ .]$/.test(p)) throw new LaunchError('ZIP_UNSAFE', `nom terminé par un point ou un espace : ${name}`);
+    if (/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i.test(p)) throw new LaunchError('ZIP_UNSAFE', `nom réservé par Windows : ${name}`);
   }
   return parts;
 }
@@ -242,23 +246,25 @@ class ZipArchive {
     const exclude = opts.exclude || [];
     const root = path.resolve(destDir);
     try { await fsp.mkdir(root, { recursive: true }); } catch (err) { throw fromSystemError(err, root); }
-    const realRoot = await fsp.realpath(root);
+    let realRoot;
+    try { realRoot = await fsp.realpath(root); } catch (err) { throw fromSystemError(err, root); }
     const chosen = [];
     const names = new Set();
     let total = 0;
     for (const entry of this.entries) {
-      let name = entry.name.replace(/\\/g, '/');
-      if (exclude.some((x) => name.startsWith(x))) continue;
+      if (entry.isSymlink) continue; // liens symboliques : ignorés
+      // Les règles (exclude, strip, filter) s'appliquent au nom NORMALISÉ (« ./META-INF/x » = « META-INF/x »).
+      const all = safeParts(entry.name);
+      let name = all.join('/');
+      if (entry.isDirectory || !name) continue;
+      if (exclude.some((x) => name.startsWith(x) || (name + '/') === x)) continue;
       if (opts.strip) {
         if (!name.startsWith(opts.strip)) continue;
         name = name.slice(opts.strip.length);
         if (!name) continue;
       }
       if (opts.filter && !opts.filter(name)) continue;
-      if (entry.isSymlink) continue; // liens symboliques : ignorés
-      const parts = safeParts(name);
-      if (parts.length === 0) continue;
-      if (entry.isDirectory) continue;
+      const parts = name.split('/');
       const key = parts.join('/').toLowerCase();
       if (names.has(key)) throw new LaunchError('ZIP_UNSAFE', `deux fichiers au même nom : ${entry.name}`);
       names.add(key);
@@ -276,18 +282,20 @@ class ZipArchive {
       const parent = path.dirname(target);
       try { await fsp.mkdir(parent, { recursive: true }); } catch (err) { throw fromSystemError(err, parent); }
       // Un dossier existant ne doit pas être un lien qui pointe ailleurs.
-      const realParent = await fsp.realpath(parent);
+      let realParent;
+      try { realParent = await fsp.realpath(parent); } catch (err) { throw fromSystemError(err, parent); }
       const relReal = path.relative(realRoot, realParent);
       if (relReal.startsWith('..') || path.isAbsolute(relReal)) throw new LaunchError('ZIP_UNSAFE', `dossier détourné : ${entry.name}`);
       try {
         const st = await fsp.lstat(target);
         if (st.isSymbolicLink() || st.isDirectory()) throw new LaunchError('ZIP_UNSAFE', `cible existante interdite : ${entry.name}`);
       } catch (err) { if (err instanceof LaunchError) throw err; }
-      const part = target + '.part';
+      const part = `${target}.${crypto.randomBytes(6).toString('hex')}.part`;
       const { streams } = await this.openStream(entry);
       try {
-        // Droits normaux uniquement (jamais SUID ni exécutable venant de l'archive).
-        await pipeline(...streams, fs.createWriteStream(part, { mode: 0o644, flags: 'w' }));
+        // Création exclusive (jamais à travers un lien), droits normaux uniquement
+        // (jamais SUID ni exécutable venant de l'archive).
+        await pipeline(...streams, fs.createWriteStream(part, { mode: 0o644, flags: 'wx' }));
         await fsp.rename(part, target);
       } catch (err) {
         await fsp.rm(part, { force: true }).catch(() => {});
