@@ -32,6 +32,7 @@ const MESSAGES = {
   LAUNCH_FAILED: "Le jeu n'a pas pu démarrer.",
   CANCELLED: 'Opération annulée.',
   INVALID_OPTION: 'Option invalide.',
+  INTERNAL: 'Erreur inattendue du moteur.',
 };
 
 class LaunchError extends Error {
@@ -65,8 +66,27 @@ function fromSystemError(err, file) {
   return new LaunchError('FILESYSTEM', err && err.message, extra);
 }
 
+/**
+ * Toute erreur qui sort du moteur devient une LaunchError (code + message clair).
+ * Les erreurs système (ENOSPC, EACCES…) gardent leur sens ; le reste devient INTERNAL.
+ */
+function toLaunchError(err) {
+  if (err instanceof LaunchError) return err;
+  if (err && (err.name === 'AbortError' || (err.code && /^E[A-Z]+$/.test(err.code)))) return fromSystemError(err);
+  return new LaunchError('INTERNAL', err && err.message ? String(err.message).slice(0, 200) : undefined, { cause: err });
+}
+
+/** Enveloppe une fonction async pour que ses erreurs soient toujours des LaunchError. */
+function wrap(fn) {
+  const w = async function (...args) {
+    try { return await fn.apply(this, args); } catch (err) { throw toLaunchError(err); }
+  };
+  Object.defineProperty(w, 'name', { value: fn.name });
+  return w;
+}
+
 function isCancel(err) {
   return err && (err.code === 'CANCELLED' || err.name === 'AbortError');
 }
 
-module.exports = { LaunchError, MESSAGES, fromSystemError, isCancel };
+module.exports = { LaunchError, MESSAGES, fromSystemError, toLaunchError, wrap, isCancel };

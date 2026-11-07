@@ -30,6 +30,7 @@ function natiivesClassifier(lib, plat) {
  */
 function resolveLibraries(version, L, plat, features) {
   const out = [];
+  if (version.libraries !== undefined && !Array.isArray(version.libraries)) throw new LaunchError('MANIFEST_INVALID', 'libraries');
   for (const lib of version.libraries || []) {
     if (!lib || typeof lib.name !== 'string') continue;
     if (!rulesAllow(lib.rules, { os: plat, features })) continue;
@@ -116,6 +117,7 @@ async function prepare(opts = {}) {
   if (!opts.offline) {
     try {
       ctx.manifest = await getVersionManifest(ctx);
+      if (ctx.manifest.fromCache) ctx.offline = true; // Internet coupé : on continue avec ce qui est là
       mcVersion = resolveAlias(ctx.manifest, mcVersion);
       if (!ctx.manifest.versions.some((v) => v.id === mcVersion)) {
         // Peut être un profil moddé déjà installé (ex. « fabric-loader-…-1.21.4 »).
@@ -142,6 +144,9 @@ async function prepare(opts = {}) {
   const files = [];
   // 1. Le jeu (jar client de la version de base).
   const client = version.downloads && version.downloads.client;
+  if (client && client.url && !(typeof client.sha1 === 'string' && SAFE_HASH.test(client.sha1.toLowerCase()))) {
+    throw new LaunchError('MANIFEST_INVALID', 'empreinte du jeu');
+  }
   const baseJar = path.join(L.versions, baseId, `${baseId}.jar`);
   if (client && client.url) files.push({ url: client.url, path: baseJar, sha1: client.sha1, size: client.size, stage: 'jeu' });
   let clientJar = baseJar;
@@ -187,6 +192,7 @@ async function prepare(opts = {}) {
   let logging = null;
   const lc = version.logging && version.logging.client;
   if (lc && lc.file && lc.file.url && typeof lc.argument === 'string') {
+    if (!(typeof lc.file.sha1 === 'string' && SAFE_HASH.test(lc.file.sha1.toLowerCase()))) throw new LaunchError('MANIFEST_INVALID', 'empreinte des journaux');
     const lid = safeRelPath(String(lc.file.id || 'client.xml'));
     logging = { argument: lc.argument, path: path.join(L.assets, 'log_configs', lid.replace(/\//g, '_')) };
     files.push({ url: lc.file.url, path: logging.path, sha1: lc.file.sha1, size: lc.file.size, stage: 'jeu' });
@@ -195,7 +201,11 @@ async function prepare(opts = {}) {
   // 5. Java automatique (inclus d'office), sauf si un Java est donné.
   let java;
   if (opts.java && opts.java !== 'auto') {
-    java = { component: null, executable: path.resolve(String(opts.java)), auto: false };
+    const j = String(opts.java);
+    if (j.includes('\0') || /^-/.test(j)) throw new LaunchError('INVALID_OPTION', 'java');
+    // Un nom nu (« java ») est cherché dans le PATH par le système ; sinon chemin absolu.
+    const bare = !/[\\/]/.test(j);
+    java = { component: null, executable: bare ? j : path.resolve(j), bare, auto: false, minMajor: requiredJava(version) };
   } else {
     const component = componentFor(version);
     const rt = await planRuntime(component, { runtimeDir: L.runtime, offline: ctx.offline, net });
@@ -245,6 +255,12 @@ async function prepare(opts = {}) {
   };
 }
 
+/** Version minimale de Java demandée par la version (8 si rien n'est dit). */
+function requiredJava(version) {
+  const m = version && version.javaVersion && Number(version.javaVersion.majorVersion);
+  return Number.isInteger(m) && m >= 8 && m < 100 ? m : 8;
+}
+
 async function checkFiles(files, missing, opts) {
   let i = 0;
   const worker = async () => {
@@ -256,4 +272,4 @@ async function checkFiles(files, missing, opts) {
   await Promise.all(Array.from({ length: Math.min(32, files.length) }, worker));
 }
 
-module.exports = { prepare, resolveLibraries, checkFiles, RESOURCES_URL };
+module.exports = { prepare, resolveLibraries, checkFiles, requiredJava, RESOURCES_URL };

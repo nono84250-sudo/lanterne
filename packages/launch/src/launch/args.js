@@ -63,6 +63,26 @@ function substitute(arg, vars) {
   return arg.replace(/\$\{([a-zA-Z0-9_]+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m));
 }
 
+/**
+ * Options JVM venant des JSON téléchargés (Mojang, chargeurs) : on refuse tout
+ * ce qui permettrait d'exécuter du code ou une commande en dehors du jeu.
+ * Les options données par l'appelant (opts.jvmArgs) ne passent pas par ce filtre.
+ */
+const FORBIDDEN_JVM = [
+  /^-agentlib/i, /^-agentpath/i, /^-javaagent/i, /^-Xbootclasspath/i, /^-Xrun/i, /^-Xdebug/i,
+  /^-XX:[+-]?On[A-Z]/, /^-XX:[+-]?(?:StartFlightRecording|FlightRecorderOptions|Flags|VMOptionsFile|ErrorFile|LogFile)/i,
+  /^-XX:[+-]?(?:EnableDynamicAgentLoading|PerfDataSaveFile)/i, /^--?patch-module/i, /^-Djava\.system\.class\.loader/i,
+  /^-Djava\.security\.(?:manager|policy)/i, /^-Djava\.rmi\./i, /^-Dcom\.sun\.management/i, /^-Djdk\.attach/i,
+  /^@/, /^-Xlog/i, /^-verbose/i,
+];
+const SECRET_VAR = /\$\{(?:auth_[a-z_]+|user_properties|clientid)\}/i;
+
+function jvmArgAllowed(a) {
+  if (typeof a !== 'string' || a.includes('\0')) return false;
+  if (SECRET_VAR.test(a)) return false; // le jeton ne va jamais dans les options Java
+  return !FORBIDDEN_JVM.some((re) => re.test(a.trim()));
+}
+
 function memoryArg(v, flag) {
   if (v === undefined || v === null || v === '') return null;
   const s = String(v).trim();
@@ -74,7 +94,8 @@ function memoryArg(v, flag) {
 /**
  * Construit la commande Java complète : liste d'arguments (jamais une ligne
  * de commande à interpréter).
- * @returns {{javaPath: string, args: string[], account: object, secrets: string[]}}
+ * @returns {{javaPath: string, args: string[], account: object, secrets: string[], ignored: string[]}}
+ *   account ne contient jamais le jeton ; secrets sert seulement à masquer les journaux.
  */
 function buildArgs(plan, opts = {}) {
   const v = plan.version;
@@ -141,15 +162,25 @@ function buildArgs(plan, opts = {}) {
   const memMin = memoryArg(opts.memory && opts.memory.min !== undefined ? opts.memory.min : (opts.memoire && opts.memoire.min), '-Xms');
   if (memMax) jvm.push(memMax);
   if (memMin) jvm.push(memMin);
-  // Options JVM conseillées par Mojang (26.x) : on garde, sauf la mémoire si l'appelant l'a choisie.
-  const defaults = expandList(v.arguments && v.arguments['default-user-jvm'], features, plat)
-    .filter((a) => !((memMax || memMin) && /^-Xm[sx]/.test(a)));
-  jvm.push(...defaults);
-  if (Array.isArray(opts.jvmArgs)) jvm.push(...opts.jvmArgs.map(String));
-  if (plan.logging && !opts.noLogConfig) jvm.push(plan.logging.argument.replace('${path}', plan.logging.path));
+  const ignored = [];
+  const fromJson = (list) => list.filter((a) => (jvmArgAllowed(a) ? true : (ignored.push(a), false)));
+  const callerJvm = Array.isArray(opts.jvmArgs) ? opts.jvmArgs.map(String) : [];
+  // Options JVM conseillées par Mojang (26.x) : seulement si l'appelant n'a pas
+  // donné les siennes, et sans la mémoire si l'appelant l'a choisie.
+  if (!callerJvm.length) {
+    const defaults = fromJson(expandList(v.arguments && v.arguments['default-user-jvm'], features, plat))
+      .filter((a) => !((memMax || memMin) && /^-Xm[sx]/.test(a)));
+    jvm.push(...defaults);
+  }
+  jvm.push(...callerJvm);
+  if (plan.logging && !opts.noLogConfig) {
+    const la = String(plan.logging.argument || '');
+    if (jvmArgAllowed(la) && la.includes('${path}')) jvm.push(la.replace('${path}', plan.logging.path));
+    else ignored.push(la);
+  }
 
   if (v.arguments && Array.isArray(v.arguments.jvm)) {
-    jvm.push(...expandList(v.arguments.jvm, features, plat));
+    jvm.push(...fromJson(expandList(v.arguments.jvm, features, plat)));
   } else {
     if (plat.name === 'osx') jvm.push('-XstartOnFirstThread');
     if (plat.name === 'windows') jvm.push('-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump');
@@ -176,7 +207,13 @@ function buildArgs(plan, opts = {}) {
 
   if (typeof v.mainClass !== 'string' || !/^[A-Za-z0-9_.$]+$/.test(v.mainClass)) throw new LaunchError('MANIFEST_INVALID', 'mainClass');
   const args = [...jvm.map((a) => substitute(a, vars)), v.mainClass, ...game.map((a) => substitute(a, vars))];
-  return { javaPath: plan.java.executable, args, account, secrets: [account.accessToken, vars.auth_session], nativesDirectory };
+  const secrets = [account.accessToken, vars.auth_session];
+  const { accessToken, ...publicAccount } = account; // le jeton ne ressort jamais
+  void accessToken;
+  if (ignored.length && typeof opts.onLog === 'function') {
+    for (const a of ignored) opts.onLog(`[lanceur] option Java ignorée (non autorisée) : ${maskSecrets(a, secrets).slice(0, 200)}`);
+  }
+  return { javaPath: plan.java.executable, args, account: publicAccount, secrets, ignored, nativesDirectory };
 }
 
 /** Masque les secrets (jeton du joueur) dans un texte : jamais écrit en clair. */

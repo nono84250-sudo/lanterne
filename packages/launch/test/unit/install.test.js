@@ -29,7 +29,7 @@ async function makePlan(extra = {}) {
     { url: srv.url('/nat'), path: path.join(root, 'libraries', 'nat.jar'), sha1: sha1(nat), size: nat.length, stage: 'librairies' },
   ];
   return {
-    id: 'test', mcVersion: 'test', root, gameDir: path.join(root, 'instance'), offline: false, allowedHosts: ['localhost'],
+    id: 'test', mcVersion: 'test', root, gameDir: path.join(root, 'instance'), offline: false, allowedHosts: [`localhost:${srv.port}`],
     version: {}, clientJar: path.join(root, 'versions', 'test', 'test.jar'), copyJar: null,
     libraries: [{ name: 'n:n:1:natives', path: files[2].path, sha1: files[2].sha1, native: true, classpath: false, exclude: ['META-INF/'] }],
     generated: [], forge: null,

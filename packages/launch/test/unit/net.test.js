@@ -35,6 +35,7 @@ test.before(async () => {
     '/loop': (req, res) => { res.statusCode = 302; res.setHeader('location', '/loop'); res.end(); },
     '/flaky': (req, res, ctx) => { if (ctx.hits['/flaky'] < 3) { res.statusCode = 503; return res.end(); } serve(body)(req, res, ctx); },
   });
+  HOSTS.push(`localhost:${srv.port}`); // un port non standard doit être autorisé explicitement
 });
 test.after(async () => { await srv.close(); await fsp.rm(dir, { recursive: true, force: true }); });
 
@@ -77,6 +78,7 @@ test('délai maximum dépassé', async () => {
 test('serveur éteint : erreur NETWORK claire', async () => {
   const dead = await startServer({});
   const port = dead.port;
+  HOSTS.push(`localhost:${port}`);
   await dead.close();
   await assert.rejects(getBuffer(`https://localhost:${port}/x`, opts()), { code: 'NETWORK' });
 });
@@ -98,9 +100,9 @@ test('fichier corrompu (mauvaise empreinte) : refusé, rien n\'est écrit', asyn
 
 test('mauvaise taille annoncée : refusé', async () => {
   const f = path.join(dir, 'size.bin');
-  await assert.rejects(downloadFile({ url: srv.url('/big'), path: f, size: body.length }, opts({ retries: 0 })), { code: 'INTEGRITY' });
+  await assert.rejects(downloadFile({ url: srv.url('/big'), path: f, sha1: bodySha, size: body.length }, opts({ retries: 0 })), { code: 'INTEGRITY' });
   assert.equal(fs.existsSync(f), false);
-  await assert.rejects(downloadFile({ url: srv.url('/ok'), path: f, size: body.length + 10 }, opts({ retries: 0 })), (e) => ['NETWORK', 'HTTP_STATUS'].includes(e.code));
+  await assert.rejects(downloadFile({ url: srv.url('/ok'), path: f, sha1: bodySha, size: body.length + 10 }, opts({ retries: 0 })), (e) => ['NETWORK', 'HTTP_STATUS', 'INTEGRITY'].includes(e.code));
   assert.equal(fs.existsSync(f), false);
 });
 
@@ -119,12 +121,17 @@ test('erreurs serveur passagères (503) : nouvelles tentatives', async () => {
 
 test('erreur 404 : pas de nouvelle tentative inutile', async () => {
   const before = srv.ctx.hits['/nope'] || 0;
-  await assert.rejects(downloadFile({ url: srv.url('/nope'), path: path.join(dir, 'nope') }, opts()), { code: 'HTTP_STATUS' });
+  await assert.rejects(downloadFile({ url: srv.url('/nope'), path: path.join(dir, 'nope'), sha1: bodySha }, opts()), { code: 'HTTP_STATUS' });
   assert.equal(srv.ctx.hits['/nope'] - before, 1);
 });
 
+test('fichier sans empreinte SHA-1 : refusé (empreinte obligatoire)', async () => {
+  await assert.rejects(downloadFile({ url: srv.url('/ok'), path: path.join(dir, 'nosha') }, opts()), { code: 'INTEGRITY' });
+  assert.equal(fs.existsSync(path.join(dir, 'nosha')), false);
+});
+
 test('site non autorisé : refusé avant toute connexion', async () => {
-  await assert.rejects(downloadFile({ url: 'https://evil.example.com/x', path: path.join(dir, 'evil') }, opts()), { code: 'HOST_NOT_ALLOWED' });
+  await assert.rejects(downloadFile({ url: 'https://evil.example.com/x', path: path.join(dir, 'evil'), sha1: bodySha }, opts()), { code: 'HOST_NOT_ALLOWED' });
 });
 
 test('annulation pendant le téléchargement : CANCELLED, pas de fichier final', async () => {

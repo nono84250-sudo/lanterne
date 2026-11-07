@@ -8,7 +8,7 @@
 
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { LaunchError } = require('../errors');
+const { LaunchError, fromSystemError } = require('../errors');
 const { getJson, getText } = require('../net/http');
 const { downloadFile, sha1File } = require('../net/download');
 const { layout, checkId, readJsonFile, writeJsonFile, isNetworkError } = require('../manifest/versions');
@@ -84,13 +84,16 @@ async function completeLibrary(lib, net) {
   return out;
 }
 
-async function completeLibraries(libs, net, concurrency = 8) {
+async function completeLibraries(libs, net, concurrency = 8, known = {}) {
   const out = new Array(libs.length);
   let i = 0;
   const worker = async () => {
     while (i < libs.length) {
       const k = i++;
-      out[k] = await completeLibrary(libs[k], net);
+      const lib = libs[k];
+      // Empreinte déjà connue (installation précédente) : pas besoin d'Internet.
+      const pre = lib && typeof lib.name === 'string' && !lib.sha1 && typeof known[lib.name] === 'string' ? { ...lib, sha1: known[lib.name] } : lib;
+      out[k] = await completeLibrary(pre, net);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, libs.length) }, worker));
@@ -98,14 +101,16 @@ async function completeLibraries(libs, net, concurrency = 8) {
 }
 
 /** Cherche un profil déjà installé (pour le mode hors-ligne). */
-async function findInstalled(root, test) {
+async function findInstalled(root, test, accept) {
   const L = layout(root);
   let names = [];
   try { names = await fsp.readdir(L.versions); } catch { return null; }
   const matches = names.filter(test).sort((a, b) => compareDotted(b.replace(/[^0-9.]/g, '.'), a.replace(/[^0-9.]/g, '.')));
   for (const n of matches) {
     const j = await readJsonFile(path.join(L.versions, n, `${n}.json`));
-    if (j) return n;
+    if (!j) continue;
+    if (accept && !(await accept(n))) continue;
+    return n;
   }
   return null;
 }
@@ -211,19 +216,72 @@ async function resolveForgeVersion(kind, mc, loaderVersion, net) {
   return { full: lv, lv, installerUrl: `${NEOFORGE_MAVEN}net/neoforged/neoforge/${lv}/neoforge-${lv}-installer.jar` };
 }
 
+/** Groupes maven qu'un installeur a le droit de poser depuis son dossier « maven/ ». */
+function ownGroups(kind) {
+  return kind === 'forge' ? ['net/minecraftforge/'] : ['net/neoforged/'];
+}
+
+/**
+ * Lit l'installeur (sans rien écrire) : profil, version.json, processeurs.
+ * @returns {Promise<{version: object, legacy: object|null, forge: object}>}
+ */
+async function readInstaller(kind, info, installerPath, zip) {
+  const profileBuf = await zip.readEntry('install_profile.json', 8 * 1024 * 1024);
+  if (!profileBuf) throw new LaunchError('LOADER_INSTALL_FAILED', 'install_profile.json absent');
+  let profile;
+  try { profile = JSON.parse(profileBuf.toString('utf8')); } catch { throw new LaunchError('LOADER_INSTALL_FAILED', 'install_profile.json illisible'); }
+  if (!profile || typeof profile !== 'object') throw new LaunchError('LOADER_INSTALL_FAILED', 'install_profile.json');
+  const forge = { kind, installerPath, processors: [], data: {}, libraries: [], mc: info.mc, full: info.full };
+  if (profile.install && profile.versionInfo) {
+    // Ancien format (Forge 1.5 → 1.12.2 ancien) : versionInfo + jar « universal » dans l'installeur.
+    const coord = parseMaven(String(profile.install.path));
+    if (!coord.path.startsWith('net/minecraftforge/')) throw new LaunchError('LOADER_INSTALL_FAILED', 'jar universal hors de Forge');
+    return { version: profile.versionInfo, legacy: { coord, filePath: safeRelPath(String(profile.install.filePath)), name: profile.install.path }, forge };
+  }
+  const jsonPath = safeRelPath(String(profile.json || '/version.json').replace(/^\//, ''));
+  const vbuf = await zip.readEntry(jsonPath, 8 * 1024 * 1024);
+  if (!vbuf) throw new LaunchError('LOADER_INSTALL_FAILED', 'version.json absent');
+  let version;
+  try { version = JSON.parse(vbuf.toString('utf8')); } catch { throw new LaunchError('LOADER_INSTALL_FAILED', 'version.json illisible'); }
+  forge.libraries = Array.isArray(profile.libraries) ? profile.libraries : [];
+  forge.processors = (Array.isArray(profile.processors) ? profile.processors : []).filter((p) => p && typeof p.jar === 'string' && (!Array.isArray(p.sides) || p.sides.includes('client')));
+  forge.data = profile.data && typeof profile.data === 'object' ? profile.data : {};
+  return { version, legacy: null, forge };
+}
+
 async function installForgeLike(kind, mc, loaderVersion, opts) {
   const L = layout(opts.root);
   const markerName = (id) => path.join(L.versions, id, '.lanterne-loader.json');
+  // NeoForge 1.20.1 porte les mêmes numéros que Forge 47.1.x : identifiant local distinct.
+  const localId = (versionId) => (kind === 'neoforge' && mc === '1.20.1' ? `neoforge-${versionId}` : versionId);
+  const installerFile = (full) => path.join(L.cache, 'installers', `${kind}-${full}-installer.jar`);
+
+  /** Résultat à partir d'une installation déjà faite (marqueur + installeur intact). */
+  const fromMarker = async (id) => {
+    const marker = await readJsonFile(markerName(id));
+    if (!marker || marker.loader !== kind || typeof marker.full !== 'string' || !SAFE_LOADER_VERSION.test(marker.full)) return null;
+    const installerPath = installerFile(marker.full);
+    if (!marker.installerSha1 || (await sha1File(installerPath)) !== marker.installerSha1) return null;
+    if (!(await readJsonFile(path.join(L.versions, id, `${id}.json`)))) return null;
+    // Les processeurs sont relus dans l'installeur vérifié (jamais pris dans un fichier local).
+    const zip = await openZip(installerPath);
+    try {
+      const r = await readInstaller(kind, { mc, full: marker.full }, installerPath, zip);
+      r.forge.libraries = await completeLibraries(r.forge.libraries, opts.net, 8, marker.librarySha1 || {});
+      return { versionId: id, loaderVersion: marker.loaderVersion, forge: r.forge.processors.length ? r.forge : null };
+    } finally {
+      await zip.close();
+    }
+  };
   const offlineFind = async () => {
-    const id = await findInstalled(opts.root, (n) => kind === 'forge'
+    let found = null;
+    await findInstalled(opts.root, (n) => kind === 'forge'
       ? (n.startsWith(`${mc}-forge`) && (!loaderVersion || n.includes(loaderVersion)))
       : mc === '1.20.1'
-        ? (n.startsWith('1.20.1-forge-47.1.') && (!loaderVersion || n.endsWith(loaderVersion)))
-        : (n.startsWith('neoforge-') && n.slice(9).startsWith(loaderVersion || neoforgePrefix(mc))));
-    if (!id) return null;
-    const marker = await readJsonFile(markerName(id));
-    if (!marker || (marker.loader && marker.loader !== kind)) return null;
-    return { versionId: id, loaderVersion: marker.loaderVersion, forge: marker.forge };
+        ? (n.startsWith('neoforge-1.20.1-forge-') && (!loaderVersion || n.endsWith(loaderVersion)))
+        : (n.startsWith('neoforge-') && n.slice(9).startsWith(loaderVersion || neoforgePrefix(mc))),
+    async (n) => { found = await fromMarker(n); return !!found; });
+    return found;
   };
   if (opts.offline) {
     const r = await offlineFind();
@@ -231,8 +289,14 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
     return r;
   }
   let info;
+  let sha1;
   try {
     info = await resolveForgeVersion(kind, mc, loaderVersion, opts.net);
+    if (!SAFE_LOADER_VERSION.test(info.full) || !SAFE_LOADER_VERSION.test(String(info.lv)) || info.full.includes('..')) {
+      throw new LaunchError('LOADER_NOT_FOUND', 'numéro de version du chargeur invalide');
+    }
+    info.mc = mc;
+    sha1 = await fetchSha1(info.installerUrl, opts.net);
   } catch (err) {
     if (isNetworkError(err)) {
       const r = await offlineFind();
@@ -241,82 +305,106 @@ async function installForgeLike(kind, mc, loaderVersion, opts) {
     }
     throw err;
   }
+  if (!sha1) throw new LaunchError('INTEGRITY', `pas d'empreinte publiée pour l'installeur ${kind}`);
 
   // 1. L'installeur officiel (vérifié par son empreinte publiée).
-  const installerPath = path.join(L.cache, 'installers', `${kind}-${info.full}-installer.jar`);
-  const sha1 = await fetchSha1(info.installerUrl, opts.net);
-  if (!sha1) throw new LaunchError('INTEGRITY', `pas d'empreinte publiée pour l'installeur ${kind}`);
+  const installerPath = installerFile(info.full);
+  const rel = path.relative(L.cache, installerPath);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) throw new LaunchError('LOADER_NOT_FOUND', 'chemin d\'installeur invalide');
   if ((await sha1File(installerPath)) !== sha1) {
     await downloadFile({ url: info.installerUrl, path: installerPath, sha1 }, { ...opts.net, control: opts.control });
   }
 
-  // 2. Lecture du profil d'installation.
+  // 2. Déjà installé avec ce même installeur ? On ne refait rien (et on ne touche à
+  //    aucun fichier qu'une instance en cours pourrait utiliser).
   const zip = await openZip(installerPath);
   try {
-    const profileBuf = await zip.readEntry('install_profile.json', 8 * 1024 * 1024);
-    if (!profileBuf) throw new LaunchError('LOADER_INSTALL_FAILED', 'install_profile.json absent');
-    let profile;
-    try { profile = JSON.parse(profileBuf.toString('utf8')); } catch { throw new LaunchError('LOADER_INSTALL_FAILED', 'install_profile.json illisible'); }
-
-    let version;
-    const forge = { kind, installerPath, processors: [], data: {}, libraries: [], mc, full: info.full };
-
-    if (profile.install && profile.versionInfo) {
-      // Ancien format (Forge 1.5 → 1.12.2 ancien) : versionInfo + jar « universal » dans l'installeur.
-      version = profile.versionInfo;
-      const coord = parseMaven(profile.install.path);
-      const filePath = safeRelPath(profile.install.filePath);
-      const target = path.join(L.libraries, ...coord.path.split('/'));
-      const entry = zip.getEntry(filePath);
-      if (!entry) throw new LaunchError('LOADER_INSTALL_FAILED', 'jar universal absent');
-      await fsp.mkdir(path.dirname(target), { recursive: true });
-      const tmpDir = path.join(L.cache, 'tmp', `${kind}-${info.full}`);
-      await fsp.rm(tmpDir, { recursive: true, force: true });
-      await zip.extractTo(tmpDir, { filter: (n) => n === filePath });
-      await fsp.rename(path.join(tmpDir, ...filePath.split('/')), target);
-      await fsp.rm(tmpDir, { recursive: true, force: true });
-      const universalSha1 = await sha1File(target);
-      const libs = [];
-      for (const lib of version.libraries || []) {
-        if (!lib || typeof lib.name !== 'string') continue;
-        if (lib.clientreq === false) continue;
-        if (lib.name === profile.install.path) {
-          libs.push({ name: lib.name, downloads: { artifact: { path: coord.path, url: '', sha1: universalSha1, size: entry.uncompressedSize } } });
-          continue;
-        }
-        const clean = { name: lib.name, url: lib.url, checksums: lib.checksums };
-        if (lib.rules) clean.rules = lib.rules;
-        if (lib.natives) { clean.natives = lib.natives; clean.extract = lib.extract; }
-        libs.push(lib.natives ? lib : clean);
-      }
-      version.libraries = await completeLibraries(libs.filter((l) => !l.natives), opts.net);
-      version.libraries.push(...libs.filter((l) => l.natives));
-    } else {
-      // Format moderne (spec 0/1) : version.json + bibliothèques + « processeurs ».
-      const jsonPath = safeRelPath(String(profile.json || '/version.json').replace(/^\//, ''));
-      const vbuf = await zip.readEntry(jsonPath, 8 * 1024 * 1024);
-      if (!vbuf) throw new LaunchError('LOADER_INSTALL_FAILED', 'version.json absent');
-      try { version = JSON.parse(vbuf.toString('utf8')); } catch { throw new LaunchError('LOADER_INSTALL_FAILED', 'version.json illisible'); }
-      // Les bibliothèques embarquées dans l'installeur (dossier maven/).
-      await zip.extractTo(L.libraries, { strip: 'maven/' });
-      version.libraries = await completeLibraries(version.libraries || [], opts.net);
-      forge.libraries = await completeLibraries(profile.libraries || [], opts.net);
-      forge.processors = (profile.processors || []).filter((p) => !p.sides || p.sides.includes('client'));
-      forge.data = profile.data || {};
+    const { version, legacy, forge } = await readInstaller(kind, info, installerPath, zip);
+    if (!version || typeof version.id !== 'string') throw new LaunchError('LOADER_INSTALL_FAILED', 'profil sans nom');
+    const id = checkId(localId(version.id));
+    const marker = await readJsonFile(markerName(id));
+    if (marker && marker.loader === kind && marker.installerSha1 === sha1 && (await readJsonFile(path.join(L.versions, id, `${id}.json`)))) {
+      forge.libraries = await completeLibraries(forge.libraries, opts.net, 8, marker.librarySha1 || {});
+      return { versionId: id, loaderVersion: marker.loaderVersion, forge: forge.processors.length ? forge : null };
     }
 
-    if (!version || typeof version.id !== 'string') throw new LaunchError('LOADER_INSTALL_FAILED', 'profil sans nom');
-    const id = checkId(version.id);
+    const tmpDir = path.join(L.cache, 'tmp', `${kind}-${info.full}-${process.pid}`);
+    try {
+      await fsp.rm(tmpDir, { recursive: true, force: true });
+      if (legacy) {
+        // Jar universal → libraries/<chemin maven de Forge>.
+        const target = path.join(L.libraries, ...legacy.coord.path.split('/'));
+        const entry = zip.getEntry(legacy.filePath);
+        if (!entry) throw new LaunchError('LOADER_INSTALL_FAILED', 'jar universal absent');
+        await zip.extractTo(tmpDir, { filter: (n) => n === legacy.filePath });
+        await fsp.mkdir(path.dirname(target), { recursive: true });
+        await fsp.rename(path.join(tmpDir, ...legacy.filePath.split('/')), target);
+        const universalSha1 = await sha1File(target);
+        const libs = [];
+        for (const lib of Array.isArray(version.libraries) ? version.libraries : []) {
+          if (!lib || typeof lib.name !== 'string') continue;
+          if (lib.clientreq === false) continue;
+          if (lib.name === legacy.name) {
+            libs.push({ name: lib.name, downloads: { artifact: { path: legacy.coord.path, url: '', sha1: universalSha1, size: entry.uncompressedSize } } });
+            continue;
+          }
+          const clean = { name: lib.name, url: lib.url, checksums: lib.checksums };
+          if (lib.rules) clean.rules = lib.rules;
+          if (lib.natives) { clean.natives = lib.natives; clean.extract = lib.extract; }
+          libs.push(clean);
+        }
+        version.libraries = await completeLibraries(libs.filter((l) => !l.natives), opts.net);
+        version.libraries.push(...libs.filter((l) => l.natives));
+      } else {
+        // Bibliothèques embarquées (dossier maven/) : seulement celles du chargeur
+        // lui-même, et sans écraser une bibliothèque partagée valide.
+        const groups = ownGroups(kind);
+        await zip.extractTo(tmpDir, { strip: 'maven/', filter: (n) => groups.some((g) => n.startsWith(g)) });
+        for (const f of await listFiles(tmpDir)) {
+          const relp = path.relative(tmpDir, f);
+          const target = path.join(L.libraries, relp);
+          await fsp.mkdir(path.dirname(target), { recursive: true });
+          await fsp.rename(f, target).catch(async (err) => {
+            // Fichier verrouillé (instance en cours sous Windows) mais identique : on le garde.
+            if ((await sha1File(target)) === (await sha1File(f))) return;
+            throw err;
+          });
+        }
+        version.libraries = await completeLibraries(Array.isArray(version.libraries) ? version.libraries : [], opts.net);
+        forge.libraries = await completeLibraries(forge.libraries, opts.net);
+      }
+    } catch (err) {
+      throw err instanceof LaunchError ? err : fromSystemError(err, tmpDir);
+    } finally {
+      await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+
+    version.id = id;
     version.inheritsFrom = version.inheritsFrom || mc;
     delete version._comment_;
     version._lanterne = { loader: kind, loaderVersion: info.lv, complete: true };
     await writeJsonFile(path.join(L.versions, id, `${id}.json`), version);
-    const result = { versionId: id, loaderVersion: info.lv, forge: forge.processors.length ? forge : null };
-    await writeJsonFile(markerName(id), { ...result, loader: kind });
-    return result;
+    // Empreintes des bibliothèques des processeurs, pour pouvoir réinstaller hors-ligne.
+    const librarySha1 = {};
+    for (const l of forge.libraries) if (l.downloads && l.downloads.artifact && l.downloads.artifact.sha1) librarySha1[l.name] = l.downloads.artifact.sha1;
+    await writeJsonFile(markerName(id), { loader: kind, loaderVersion: info.lv, full: info.full, installerSha1: sha1, librarySha1 });
+    return { versionId: id, loaderVersion: info.lv, forge: forge.processors.length ? forge : null };
   } finally {
     await zip.close();
   }
+}
+
+async function listFiles(dir) {
+  const out = [];
+  const walk = async (d) => {
+    for (const e of await fsp.readdir(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) await walk(p);
+      else if (e.isFile()) out.push(p);
+    }
+  };
+  try { await walk(dir); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+  return out;
 }
 
 /**

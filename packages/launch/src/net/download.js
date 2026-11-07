@@ -6,7 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { LaunchError, fromSystemError, isCancel } = require('../errors');
 const { secureGet } = require('./http');
-const { normalizeControl } = require('./control');
+const { normalizeControl, createControl } = require('./control');
 
 const DEFAULT_MAX_UNKNOWN_SIZE = 1024 * 1024 * 1024; // 1 Go si la taille n'est pas annoncée
 
@@ -52,75 +52,113 @@ function isRetryable(err) {
 }
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
-  const t = setTimeout(resolve, ms);
-  if (signal) signal.addEventListener('abort', () => { clearTimeout(t); reject(new LaunchError('CANCELLED')); }, { once: true });
+  const onAbort = () => { clearTimeout(t); reject(new LaunchError('CANCELLED')); };
+  const t = setTimeout(() => { if (signal) signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+  if (signal) signal.addEventListener('abort', onAbort, { once: true });
 });
+
+const SAFE_SHA1 = /^[0-9a-f]{40}$/;
+
+function checkHash(file) {
+  const h = typeof file.sha1 === 'string' ? file.sha1.toLowerCase() : '';
+  if (!SAFE_SHA1.test(h)) throw new LaunchError('INTEGRITY', `pas d'empreinte SHA-1 valable pour ${path.basename(String(file.path))}`, { file: file.path });
+  return h;
+}
+
+/** Le .part ne doit jamais être un lien (sinon on écrirait ailleurs). */
+async function preparePart(part, expectedSize) {
+  let st = null;
+  try { st = await fsp.lstat(part); } catch { /* absent */ }
+  if (st && (!st.isFile() || st.isSymbolicLink())) {
+    await fsp.rm(part, { force: true, recursive: false }).catch(() => {});
+    if (st.isDirectory()) throw new LaunchError('FILESYSTEM', `dossier à la place de ${path.basename(part)}`);
+    st = null;
+  }
+  if (st && st.size > 0 && (expectedSize === null || st.size < expectedSize)) return { offset: st.size, ino: st.ino };
+  if (st) await fsp.rm(part, { force: true }).catch(() => {});
+  return { offset: 0, ino: null };
+}
 
 /**
  * Télécharge UN fichier : https + sites autorisés, écriture dans .part,
  * reprise (Range) si un .part existe, contrôle taille + SHA-1, puis renommage.
+ * L'empreinte SHA-1 est obligatoire.
  *
- * @param {{url: string, path: string, sha1?: string, size?: number}} file
- * @param {{allowedHosts?: string[], timeout?: number, control?: any, signal?: AbortSignal,
- *          onBytes?: (n: number) => void, maxBytes?: number}} [opts]
+ * @param {{url: string, path: string, sha1: string, sha1Alt?: string[], size?: number}} file
  */
 async function downloadOnce(file, opts = {}) {
   const control = normalizeControl(opts);
   const onBytes = opts.onBytes || (() => {});
-  const expectedSize = typeof file.size === 'number' && file.size >= 0 ? file.size : null;
+  const expectedSha1 = checkHash(file);
+  const expectedSize = Number.isSafeInteger(file.size) && file.size >= 0 ? file.size : null;
   const maxBytes = expectedSize ?? (opts.maxBytes || DEFAULT_MAX_UNKNOWN_SIZE);
   const part = file.path + '.part';
 
   try { await fsp.mkdir(path.dirname(file.path), { recursive: true }); } catch (err) { throw fromSystemError(err, path.dirname(file.path)); }
 
-  // Reprise : on réutilise le .part déjà présent (si plus petit que prévu).
-  let offset = 0;
-  try {
-    const st = await fsp.stat(part);
-    if (st.isFile() && st.size > 0 && (expectedSize === null || st.size < expectedSize)) offset = st.size;
-    else await fsp.rm(part, { force: true });
-  } catch { /* pas de .part */ }
-
+  let { offset, ino } = await preparePart(part, expectedSize);
   await control.wait();
   const headers = offset > 0 ? { range: `bytes=${offset}-` } : {};
   const r = await secureGet(file.url, { allowedHosts: opts.allowedHosts, timeout: opts.timeout, signal: control.signal, headers });
   const { res } = r;
   let fh = null;
   let counted = 0;
+  const deadline = Date.now() + (opts.maxDuration || 30 * 60 * 1000);
   try {
     let append = false;
     if (offset > 0 && res.status === 206) {
       const cr = res.headers.get('content-range') || '';
       const m = /^bytes (\d+)-/.exec(cr);
       if (m && Number(m[1]) === offset) append = true;
-      else throw new LaunchError('NETWORK', 'reprise refusée par le serveur', { url: r.url });
+      else {
+        await fsp.rm(part, { force: true }).catch(() => {});
+        throw new LaunchError('NETWORK', 'reprise refusée par le serveur', { url: r.url });
+      }
+    } else if (res.status === 416 && offset > 0) {
+      // Le .part est déjà complet (ou faux) : on repart de zéro à la prochaine tentative.
+      await fsp.rm(part, { force: true }).catch(() => {});
+      throw new LaunchError('NETWORK', 'reprise impossible, nouvel essai', { url: r.url });
     } else if (res.status !== 200) {
-      if (res.status === 416) await fsp.rm(part, { force: true }).catch(() => {});
       throw new LaunchError('HTTP_STATUS', `${res.status} ${new URL(r.url).host}`, { url: r.url, status: res.status });
     }
+    if (!append) offset = 0;
 
     const hash = crypto.createHash('sha1');
     let written = 0;
-    if (append) {
-      // On relit le début déjà téléchargé pour l'empreinte.
-      const s = fs.createReadStream(part, { highWaterMark: 1 << 20 });
-      for await (const chunk of s) hash.update(chunk);
-      written = offset;
-      onBytes(offset);
-      counted += offset;
-    }
     try {
-      fh = await fsp.open(part, append ? 'a' : 'w');
-    } catch (err) { throw fromSystemError(err, part); }
+      if (append) {
+        fh = await fsp.open(part, fs.constants.O_RDWR | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW || 0));
+        const st = await fh.stat();
+        if (!st.isFile() || (ino !== null && st.ino !== ino)) throw new LaunchError('FILESYSTEM', `${path.basename(part)} remplacé pendant la reprise`);
+        // On relit le début déjà téléchargé pour l'empreinte.
+        const buf = Buffer.alloc(1 << 20);
+        let pos = 0;
+        while (pos < offset) {
+          const { bytesRead } = await fh.read(buf, 0, Math.min(buf.length, offset - pos), pos);
+          if (!bytesRead) break;
+          hash.update(buf.subarray(0, bytesRead));
+          pos += bytesRead;
+        }
+        written = offset;
+        onBytes(offset);
+        counted += offset;
+      } else {
+        await fsp.rm(part, { force: true }).catch(() => {});
+        // Création exclusive : échoue si un fichier ou un lien est apparu entre-temps.
+        fh = await fsp.open(part, 'wx', 0o644);
+      }
+    } catch (err) { throw err instanceof LaunchError ? err : fromSystemError(err, part); }
 
     try {
       for await (const chunk of res.body) {
         r.tick();
         if (control.paused) {
+          r.hold(); // le délai réseau ne court pas pendant une pause
           await control.wait();
           r.tick();
         }
         if (control.cancelled) throw new LaunchError('CANCELLED');
+        if (Date.now() > deadline) throw new LaunchError('TIMEOUT', `${path.basename(file.path)} trop long à télécharger`, { url: r.url });
         written += chunk.length;
         if (written > maxBytes) throw new LaunchError(expectedSize !== null ? 'INTEGRITY' : 'TOO_LARGE', `${path.basename(file.path)} plus gros que prévu`, { url: r.url, file: file.path });
         hash.update(chunk);
@@ -138,12 +176,11 @@ async function downloadOnce(file, opts = {}) {
     fh = null;
 
     if (expectedSize !== null && written !== expectedSize) {
-      // Fichier tronqué ou trop court.
       if (written > expectedSize) await fsp.rm(part, { force: true }).catch(() => {});
       throw new LaunchError(written < expectedSize ? 'NETWORK' : 'INTEGRITY', `${path.basename(file.path)} incomplet (${written}/${expectedSize})`, { url: r.url, file: file.path });
     }
     const digest = hash.digest('hex');
-    if (file.sha1 && !hashMatches(file, digest)) {
+    if (!hashMatches({ ...file, sha1: expectedSha1 }, digest)) {
       await fsp.rm(part, { force: true }).catch(() => {});
       throw new LaunchError('INTEGRITY', path.basename(file.path), { url: r.url, file: file.path });
     }
@@ -161,22 +198,44 @@ async function downloadOnce(file, opts = {}) {
   }
 }
 
+// Un même fichier n'est jamais téléchargé deux fois en même temps (cache partagé).
+const inFlight = new Map();
+
 /** Télécharge un fichier avec nouvelles tentatives (attente croissante). */
 async function downloadFile(file, opts = {}) {
+  const key = path.resolve(String(file.path));
+  while (inFlight.has(key)) {
+    await inFlight.get(key).catch(() => {});
+    if (await isFileValid(file)) return { bytes: 0, sha1: file.sha1, skipped: true };
+  }
+  const p = downloadWithRetries(file, opts);
+  inFlight.set(key, p);
+  try { return await p; } finally { if (inFlight.get(key) === p) inFlight.delete(key); }
+}
+
+async function downloadWithRetries(file, opts) {
   const control = normalizeControl(opts);
   const retries = opts.retries ?? 4;
+  const log = opts.onLog || (() => {});
   let lastErr;
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  let attempt = 0;
+  for (;;) {
+    const epoch = control.pauseEpoch;
     try {
       return await downloadOnce(file, { ...opts, control });
     } catch (err) {
       lastErr = err instanceof LaunchError ? err : fromSystemError(err, file.path);
       if (isCancel(lastErr) || control.cancelled) throw new LaunchError('CANCELLED');
-      if (!isRetryable(lastErr) || attempt === retries) break;
+      if (!isRetryable(lastErr)) break;
+      // Un échec causé par une pause (connexion coupée par le serveur) ne compte pas.
+      if (control.pauseEpoch === epoch) attempt++;
+      if (attempt > retries) break;
       if (lastErr.code === 'INTEGRITY') await fsp.rm(file.path + '.part', { force: true }).catch(() => {});
-      await sleep(Math.min(8000, (opts.retryDelay ?? 500) * 2 ** attempt), control.signal);
+      log(`[réseau] nouvel essai ${attempt}/${retries} pour ${path.basename(String(file.path))} : ${lastErr.code}`);
+      await sleep(Math.min(8000, (opts.retryDelay ?? 500) * 2 ** Math.max(0, attempt - 1)), control.signal);
     }
   }
+  log(`[réseau] échec : ${path.basename(String(file.path))} : ${lastErr.code}`);
   throw lastErr;
 }
 
@@ -198,6 +257,7 @@ class Progress {
       this.stages[s].totalFiles += 1;
       this.totalBytes += f.size || 0;
     }
+    this.unknownSizes = files.some((f) => !Number.isSafeInteger(f.size));
     this.samples = [[Date.now(), 0]];
     this.lastEmit = 0;
     this.stage = null;
@@ -236,10 +296,21 @@ class Progress {
       doneMB: +(this.doneBytes / 1048576).toFixed(1),
       speedBytes: Math.round(speed),
       speedMBs: +(speed / 1048576).toFixed(2),
-      etaSeconds: speed > 0 ? Math.round(remaining / speed) : null,
-      percent: this.totalBytes ? Math.min(100, Math.floor((this.doneBytes / this.totalBytes) * 100)) : (this.totalFiles ? Math.floor((this.doneFiles / this.totalFiles) * 100) : 100),
-      stages: JSON.parse(JSON.stringify(this.stages)),
+      etaSeconds: speed > 0 && remaining > 0 ? Math.round(remaining / speed) : (this.doneFiles >= this.totalFiles ? 0 : null),
+      percent: this.percent(),
+      sizesKnown: !this.unknownSizes,
+      stages: Object.fromEntries(Object.entries(this.stages).map(([k, v]) => [k, { ...v, percent: v.totalFiles ? (v.doneFiles >= v.totalFiles ? 100 : Math.min(99, Math.floor(((v.totalBytes ? v.doneBytes / v.totalBytes : v.doneFiles / v.totalFiles)) * 100))) : 100 }])),
     };
+  }
+
+  percent() {
+    if (this.totalFiles === 0) return 100;
+    const byFiles = Math.floor((this.doneFiles / this.totalFiles) * 100);
+    if (!this.totalBytes) return byFiles;
+    const byBytes = Math.min(100, Math.floor((Math.min(this.doneBytes, this.totalBytes) / this.totalBytes) * 100));
+    // Tailles inconnues : on ne montre jamais 100 % avant le dernier fichier.
+    if (this.unknownSizes) return this.doneFiles >= this.totalFiles ? 100 : Math.min(99, Math.min(byBytes, Math.max(byFiles, byBytes - 1)));
+    return this.doneFiles >= this.totalFiles ? 100 : Math.min(99, byBytes);
   }
 
   emit(force) {
@@ -259,8 +330,9 @@ class Progress {
  *          allowedHosts?: string[], timeout?: number, retries?: number, retryDelay?: number}} [opts]
  */
 async function downloadAll(files, opts = {}) {
-  const control = normalizeControl(opts);
-  const concurrency = Math.max(1, Math.min(32, opts.concurrency || 12));
+  // Contrôle interne : une erreur arrête la file sans annuler celui de l'appelant.
+  const control = createControl(normalizeControl(opts));
+  const concurrency = Math.max(1, Math.min(16, opts.concurrency || 12));
   // Deux entrées vers le même fichier : une seule fois.
   const seen = new Set();
   const queue = [];
@@ -287,7 +359,11 @@ async function downloadAll(files, opts = {}) {
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  try {
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+  } finally {
+    control.dispose();
+  }
   progress.emit(true);
   if (failure) throw failure;
   return progress.snapshot();

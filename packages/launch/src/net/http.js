@@ -21,7 +21,7 @@ const DEFAULT_ALLOWED_HOSTS = Object.freeze([
 
 const MAX_REDIRECTS = 5;
 const DEFAULT_TIMEOUT = 30_000;
-const USER_AGENT = 'lanterne-launch/0.1 (+https://github.com/)';
+const USER_AGENT = 'lanterne-launch/0.1';
 
 /**
  * Vérifie qu'une adresse est en https et vers un site autorisé.
@@ -37,7 +37,9 @@ function checkUrl(raw, allowedHosts = DEFAULT_ALLOWED_HOSTS) {
   if (url.protocol !== 'https:') throw new LaunchError('INSECURE_URL', url.protocol + '//' + url.host, { url: url.href });
   if (url.username || url.password) throw new LaunchError('INSECURE_URL', 'identifiants dans l\'adresse', { url: url.origin });
   const host = url.hostname.toLowerCase().replace(/\.$/, '');
-  if (!allowedHosts.includes(host)) throw new LaunchError('HOST_NOT_ALLOWED', host, { url: url.href });
+  // Port standard uniquement, sauf si « hôte:port » est explicitement autorisé (tests locaux).
+  const ok = url.port === '' ? allowedHosts.includes(host) : allowedHosts.includes(`${host}:${url.port}`);
+  if (!ok) throw new LaunchError('HOST_NOT_ALLOWED', url.port ? `${host}:${url.port}` : host, { url: url.href });
   return url;
 }
 
@@ -68,7 +70,7 @@ async function secureGet(rawUrl, opts = {}) {
   const userSignal = opts.signal;
   if (userSignal && userSignal.aborted) throw new LaunchError('CANCELLED');
 
-  let url = checkUrl(rawUrl, allowedHosts);
+  let url = checkUrl(testMirror ? mirrorUrl(rawUrl) : rawUrl, allowedHosts);
   for (let hop = 0; ; hop++) {
     const ctrl = new AbortController();
     let timedOut = false;
@@ -103,7 +105,12 @@ async function secureGet(rawUrl, opts = {}) {
       if (hop >= MAX_REDIRECTS) throw new LaunchError('TOO_MANY_REDIRECTS', url.host, { url: url.href });
       let next;
       try { next = new URL(res.headers.get('location'), url); } catch { throw new LaunchError('INSECURE_URL', 'redirection illisible'); }
-      url = checkUrl(next, allowedHosts); // HTTPS + site autorisé, même après redirection
+      try {
+        url = checkUrl(next, allowedHosts); // HTTPS + site autorisé, même après redirection
+      } catch (err) {
+        err.redirected = true; // ex. portail Wi-Fi captif : traité comme « pas d'Internet » pour le repli hors-ligne
+        throw err;
+      }
       continue;
     }
     return {
@@ -111,11 +118,25 @@ async function secureGet(rawUrl, opts = {}) {
       url: url.href,
       /** à appeler à chaque morceau reçu */
       tick: arm,
+      /** suspend le délai (pendant une pause voulue par le joueur) */
+      hold: () => clearTimeout(timer),
       done: cleanup,
       isTimedOut: () => timedOut,
       mapError: (err) => mapFetchError(err, url.href, timedOut, userSignal),
     };
   }
+}
+
+// Tests automatiques uniquement (non exporté par le paquet) : toutes les adresses
+// sont envoyées vers un faux serveur local « https://localhost:port/<site>/<chemin> ».
+// La liste des sites autorisés s'applique toujours à l'adresse finale.
+let testMirror = null;
+function __setTestMirror(base) { testMirror = base ? String(base).replace(/\/?$/, '/') : null; }
+function mirrorUrl(raw) {
+  let u;
+  try { u = new URL(String(raw)); } catch { return raw; }
+  if (u.href.startsWith(testMirror)) return u.href;
+  return `${testMirror}${u.host}${u.pathname}${u.search}`;
 }
 
 /** Lit tout le corps en mémoire, avec plafond (pour les petits JSON). */
@@ -159,4 +180,4 @@ async function getText(url, opts = {}) {
   return (await getBuffer(url, opts)).toString('utf8');
 }
 
-module.exports = { DEFAULT_ALLOWED_HOSTS, checkUrl, secureGet, getBuffer, getJson, getText, USER_AGENT };
+module.exports = { DEFAULT_ALLOWED_HOSTS, checkUrl, secureGet, getBuffer, getJson, getText, USER_AGENT, __setTestMirror };

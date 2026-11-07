@@ -11,7 +11,7 @@ const { spawn } = require('node:child_process');
 const { LaunchError, fromSystemError } = require('../errors');
 const { getJson } = require('../net/http');
 const { downloadFile } = require('../net/download');
-const { readJsonFile, writeJsonFile, isNetworkError } = require('../manifest/versions');
+const { readJsonFile, isNetworkError } = require('../manifest/versions');
 const { safeRelPath } = require('../manifest/maven');
 
 const RUNTIME_INDEX_URL = 'https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json';
@@ -45,32 +45,38 @@ function componentFor(version) {
  */
 async function planRuntime(component, opts) {
   if (!SAFE_COMPONENT.test(component)) throw new LaunchError('MANIFEST_INVALID', 'composant Java');
-  let platform = opts.platformKey || runtimePlatform();
-  if (!platform) throw new LaunchError('JAVA_UNSUPPORTED', `${process.platform} ${process.arch}`);
+  const primary = opts.platformKey || runtimePlatform();
+  if (!primary) throw new LaunchError('JAVA_UNSUPPORTED', `${process.platform} ${process.arch}`);
+  // Mac Apple / Windows ARM : certains vieux Java n'existent qu'en x64 (émulation Rosetta / Prism).
+  const fallback = primary === 'mac-os-arm64' ? 'mac-os' : primary === 'windows-arm64' ? 'windows-x64' : null;
   const base = path.join(opts.runtimeDir, component);
-  const manifestCache = path.join(base, `${platform}.manifest.json`);
+  const manifestFile = (plat) => path.join(base, `${plat}.manifest.json`);
 
+  let platform = null;
   let manifest = null;
   if (!opts.offline) {
     try {
       const index = await getJson(RUNTIME_INDEX_URL, opts.net);
-      let entries = index[platform] && index[platform][component];
-      // Mac Apple : certains vieux Java n'existent qu'en Intel (Rosetta).
-      if ((!entries || !entries.length) && platform === 'mac-os-arm64') {
-        platform = 'mac-os';
-        entries = index[platform] && index[platform][component];
+      for (const plat of [primary, fallback].filter(Boolean)) {
+        const entries = index && index[plat] && index[plat][component];
+        if (Array.isArray(entries) && entries.length && entries[0].manifest) { platform = plat; break; }
       }
-      if (!entries || !entries.length) throw new LaunchError('JAVA_UNSUPPORTED', `${component} pour ${platform}`);
-      const m = entries[0].manifest;
-      const file = path.join(base, `${platform}.manifest.json`);
-      await downloadFile({ url: m.url, path: file, sha1: m.sha1, size: m.size }, { ...opts.net, retries: 3 });
-      manifest = await readJsonFile(file);
+      if (!platform) throw new LaunchError('JAVA_UNSUPPORTED', `${component} pour ${primary}`);
+      const m = index[platform][component][0].manifest;
+      await downloadFile({ url: m.url, path: manifestFile(platform), sha1: m.sha1, size: m.size }, { ...opts.net, retries: 3 });
+      manifest = await readJsonFile(manifestFile(platform));
     } catch (err) {
       if (!isNetworkError(err)) throw err;
+      platform = null;
     }
   }
-  if (!manifest) manifest = await readJsonFile(path.join(base, `${platform}.manifest.json`)) || await readJsonFile(manifestCache);
-  if (!manifest || typeof manifest.files !== 'object') throw new LaunchError('OFFLINE', `Java ${component} jamais téléchargé`);
+  if (!manifest) {
+    for (const plat of [primary, fallback].filter(Boolean)) {
+      manifest = await readJsonFile(manifestFile(plat));
+      if (manifest) { platform = plat; break; }
+    }
+  }
+  if (!manifest || typeof manifest.files !== 'object' || manifest.files === null) throw new LaunchError('OFFLINE', `Java ${component} jamais téléchargé`);
 
   const dir = path.join(base, platform);
   const files = [];
@@ -78,12 +84,13 @@ async function planRuntime(component, opts) {
   const executables = [];
   const dirs = [];
   for (const [rel, info] of Object.entries(manifest.files)) {
+    if (!info || typeof info !== 'object') continue;
     const safe = safeRelPath(rel);
     const abs = path.join(dir, ...safe.split('/'));
     if (info.type === 'directory') dirs.push(abs);
     else if (info.type === 'file') {
       const raw = info.downloads && info.downloads.raw;
-      if (!raw || !raw.url) throw new LaunchError('MANIFEST_INVALID', `Java ${rel}`);
+      if (!raw || typeof raw.url !== 'string') throw new LaunchError('MANIFEST_INVALID', `Java ${rel}`);
       files.push({ url: raw.url, path: abs, sha1: raw.sha1, size: raw.size, stage: 'java' });
       if (info.executable) executables.push(abs);
     } else if (info.type === 'link' && typeof info.target === 'string') {
@@ -93,26 +100,53 @@ async function planRuntime(component, opts) {
   return { component, platform, dir, executable: javaExecutable(dir), files, links, executables, dirs };
 }
 
-/** Après téléchargement : droits d'exécution et liens internes (jamais vers l'extérieur). */
+/** Le chemin ne traverse-t-il aucun lien symbolique entre `root` et lui ? */
+async function noSymlinkBetween(root, p) {
+  const rel = path.relative(root, p);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  let cur = root;
+  for (const part of rel.split(path.sep).slice(0, -1)) {
+    cur = path.join(cur, part);
+    try {
+      const st = await fsp.lstat(cur);
+      if (st.isSymbolicLink() || !st.isDirectory()) return false;
+    } catch { return false; }
+  }
+  return true;
+}
+
+/**
+ * Après téléchargement : droits d'exécution et liens internes au runtime.
+ * Un lien n'est créé que s'il reste dans le dossier, sans passer par un autre
+ * lien, et ne vise ni un dossier ni un autre lien (pas d'évasion en chaîne).
+ */
 async function finishRuntime(rt) {
   for (const d of rt.dirs) {
     try { await fsp.mkdir(d, { recursive: true }); } catch (err) { throw fromSystemError(err, d); }
   }
-  if (process.platform !== 'win32') {
-    for (const f of rt.executables) {
-      try { await fsp.chmod(f, 0o755); } catch (err) { throw fromSystemError(err, f); }
-    }
-    const root = path.resolve(rt.dir);
-    for (const l of rt.links) {
-      const resolved = path.resolve(path.dirname(l.path), l.target);
-      const rel = path.relative(root, resolved);
-      if (rel.startsWith('..') || path.isAbsolute(rel) || path.isAbsolute(l.target)) continue; // lien qui sort : ignoré
-      try {
-        await fsp.mkdir(path.dirname(l.path), { recursive: true });
-        await fsp.rm(l.path, { force: true });
-        await fsp.symlink(l.target, l.path);
-      } catch (err) { throw fromSystemError(err, l.path); }
-    }
+  if (process.platform === 'win32') return;
+  const root = path.resolve(rt.dir);
+  for (const f of rt.executables) {
+    try {
+      const st = await fsp.lstat(f);
+      if (st.isFile()) await fsp.chmod(f, 0o755);
+    } catch (err) { throw fromSystemError(err, f); }
+  }
+  for (const l of rt.links) {
+    if (path.isAbsolute(l.target) || l.target.includes('\0')) continue;
+    const resolved = path.resolve(path.dirname(l.path), l.target);
+    const rel = path.relative(root, resolved);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) continue; // lien qui sort : ignoré
+    if (!(await noSymlinkBetween(root, l.path)) || !(await noSymlinkBetween(root, resolved))) continue;
+    try {
+      const target = await fsp.lstat(resolved).catch(() => null);
+      if (!target || !target.isFile()) continue; // seulement vers un vrai fichier du runtime
+      const existing = await fsp.lstat(l.path).catch(() => null);
+      if (existing && existing.isDirectory()) continue;
+      if (existing) await fsp.unlink(l.path);
+      await fsp.mkdir(path.dirname(l.path), { recursive: true });
+      await fsp.symlink(l.target, l.path);
+    } catch (err) { throw fromSystemError(err, l.path); }
   }
 }
 

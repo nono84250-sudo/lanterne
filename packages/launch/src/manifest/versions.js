@@ -2,13 +2,15 @@
 
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { LaunchError, fromSystemError } = require('../errors');
 const { getJson } = require('../net/http');
 const { downloadFile, sha1File } = require('../net/download');
 const { libraryKey } = require('./maven');
 
 const VERSION_MANIFEST_URL = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._\-+ ]{0,99}$/;
+const SAFE_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._\-+ ]{0,98}[A-Za-z0-9_\-+])?$/;
+const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
 
 /** Dossiers partagés (cache commun à toutes les instances). */
 function layout(root) {
@@ -24,7 +26,7 @@ function layout(root) {
 }
 
 function checkId(id) {
-  if (typeof id !== 'string' || !SAFE_ID.test(id) || id.includes('..')) throw new LaunchError('INVALID_OPTION', `nom de version « ${String(id).slice(0, 40)} »`);
+  if (typeof id !== 'string' || !SAFE_ID.test(id) || id.includes('..') || RESERVED.test(id)) throw new LaunchError('INVALID_OPTION', `nom de version « ${String(id).slice(0, 40)} »`);
   return id;
 }
 
@@ -41,16 +43,24 @@ async function readJsonFile(file) {
 async function writeJsonFile(file, data) {
   try {
     await fsp.mkdir(path.dirname(file), { recursive: true });
-    const part = file + '.part';
-    await fsp.writeFile(part, JSON.stringify(data, null, 2));
+    const part = `${file}.${crypto.randomBytes(6).toString('hex')}.part`;
+    await fsp.writeFile(part, JSON.stringify(data, null, 2), { flag: 'wx' });
     await fsp.rename(part, file);
   } catch (err) {
     throw fromSystemError(err, file);
   }
 }
 
+/** Erreur « pas d'Internet » (y compris un portail Wi-Fi captif qui redirige ailleurs). */
 function isNetworkError(err) {
-  return err instanceof LaunchError && ['NETWORK', 'TIMEOUT'].includes(err.code);
+  if (!(err instanceof LaunchError)) return false;
+  if (['NETWORK', 'TIMEOUT'].includes(err.code)) return true;
+  return !!err.redirected && ['INSECURE_URL', 'HOST_NOT_ALLOWED'].includes(err.code);
+}
+
+function validManifest(m) {
+  return !!(m && typeof m === 'object' && m.latest && typeof m.latest.release === 'string' && Array.isArray(m.versions) &&
+    m.versions.every((v) => v && typeof v.id === 'string' && typeof v.url === 'string'));
 }
 
 /**
@@ -63,18 +73,22 @@ async function getVersionManifest(opts) {
   if (!opts.offline) {
     try {
       const data = await getJson(VERSION_MANIFEST_URL, opts.net);
-      if (!data || !Array.isArray(data.versions)) throw new LaunchError('MANIFEST_INVALID', 'liste des versions');
+      if (!validManifest(data)) throw new LaunchError('MANIFEST_INVALID', 'liste des versions');
       await writeJsonFile(cacheFile, data);
       return data;
     } catch (err) {
       if (!isNetworkError(err)) throw err;
       const cached = await readJsonFile(cacheFile);
-      if (cached) return cached;
+      if (validManifest(cached)) {
+        // Internet coupé : on signale que la liste vient du cache (l'appelant passe en hors-ligne).
+        Object.defineProperty(cached, 'fromCache', { value: true, enumerable: false });
+        return cached;
+      }
       throw new LaunchError('OFFLINE', 'liste des versions', { cause: err });
     }
   }
   const cached = await readJsonFile(cacheFile);
-  if (!cached) throw new LaunchError('OFFLINE', 'liste des versions jamais téléchargée');
+  if (!validManifest(cached)) throw new LaunchError('OFFLINE', 'liste des versions jamais téléchargée');
   return cached;
 }
 
@@ -133,28 +147,27 @@ function mergeVersion(parent, child) {
   const out = { ...parent, ...child };
   delete out.inheritsFrom;
   // Bibliothèques : l'enfant passe d'abord et remplace le même artefact du parent.
-  const seen = new Set();
-  const libs = [];
-  for (const lib of [...(child.libraries || []), ...(parent.libraries || [])]) {
-    if (!lib || typeof lib.name !== 'string') continue;
-    const key = libraryKey(lib.name) + (lib.natives ? ':natives' : '');
-    if (seen.has(key)) continue;
-    seen.add(key);
-    libs.push(lib);
-  }
-  out.libraries = libs;
+  // On ne dédoublonne PAS le parent avec lui-même : Mojang liste parfois deux
+  // fois la même bibliothèque avec des règles opposées (ex. lwjgl osx / autres).
+  const childLibs = (Array.isArray(child.libraries) ? child.libraries : []).filter((l) => l && typeof l.name === 'string');
+  const parentLibs = (Array.isArray(parent.libraries) ? parent.libraries : []).filter((l) => l && typeof l.name === 'string');
+  const childKeys = new Set(childLibs.map((l) => libraryKey(l.name) + (l.natives ? ':natives' : '')));
+  out.libraries = [...childLibs, ...parentLibs.filter((l) => !childKeys.has(libraryKey(l.name) + (l.natives ? ':natives' : '')))];
   // Arguments modernes : on ajoute ceux de l'enfant à ceux du parent.
   if (parent.arguments || child.arguments) {
     const pa = parent.arguments || {};
     const ca = child.arguments || {};
     out.arguments = {};
     for (const k of new Set([...Object.keys(pa), ...Object.keys(ca)])) {
-      out.arguments[k] = [...(pa[k] || []), ...(ca[k] || [])];
+      out.arguments[k] = [...(Array.isArray(pa[k]) ? pa[k] : []), ...(Array.isArray(ca[k]) ? ca[k] : [])];
     }
   }
-  for (const k of ['assetIndex', 'assets', 'downloads', 'javaVersion']) {
-    if (child[k] === undefined && parent[k] !== undefined) out[k] = parent[k];
+  // Le jeu de base (jar, sons et textures) vient TOUJOURS de Mojang : un profil
+  // de chargeur ne peut pas le remplacer.
+  for (const k of ['assetIndex', 'assets', 'downloads']) {
+    if (parent[k] !== undefined) out[k] = parent[k]; else delete out[k];
   }
+  if (child.javaVersion === undefined && parent.javaVersion !== undefined) out.javaVersion = parent.javaVersion;
   // Un « logging » vide chez l'enfant (Forge 1.12) ne doit pas effacer celui du parent.
   out.logging = child.logging && Object.keys(child.logging).length ? child.logging : parent.logging;
   // Jar du jeu : seulement si l'enfant en nomme un (ancien Forge : « jar: 1.8.9 »).
