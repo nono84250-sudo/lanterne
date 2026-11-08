@@ -2,8 +2,15 @@
   "name": "lanterne",
   "private": true,
   "license": "MIT",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "npm test --workspaces"
+  },
+  "description": "Moteur de lancement Minecraft Java pour Node.js : vanilla, Fabric, Quilt, NeoForge, Forge. Zéro dépendance.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nono84250-sudo/lanterne.git"
   }
 }
