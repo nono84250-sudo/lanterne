@@ -3,11 +3,43 @@
   "version": "0.1.0",
   "private": true,
   "description": "Moteur qui télécharge, installe et lance Minecraft (vanilla, Fabric, Quilt, NeoForge, Forge). Zéro dépendance.",
+  "keywords": [
+    "minecraft",
+    "launcher",
+    "minecraft-launcher",
+    "fabric",
+    "quilt",
+    "forge",
+    "neoforge",
+    "java",
+    "electron"
+  ],
+  "homepage": "https://github.com/nono84250-sudo/lanterne#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nono84250-sudo/lanterne.git",
+    "directory": "packages/launch"
+  },
+  "bugs": {
+    "url": "https://github.com/nono84250-sudo/lanterne/issues"
+  },
   "main": "src/index.js",
-  "exports": { ".": "./src/index.js", "./package.json": "./package.json" },
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
   "license": "MIT",
-  "engines": { "node": ">=22" },
-  "files": ["src", "README.md", "README.en.md", "SECURITY.md", "CHANGELOG.md", "LICENSE"],
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "README.en.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node test/run.js",
     "test:live": "node test/live/run-live.js"
