@@ -36,6 +36,7 @@ async function main() {
   const game = await lib.launch({ plan, account: demo ? { type: 'demo', name: 'Demo_Player' } : { type: 'offline', name: 'Testeur' }, memory: { max: 2048 }, jvmArgs: process.env.SMOKE_JVM ? process.env.SMOKE_JVM.split(' ') : undefined });
   const tl = Date.now();
   let reached = false;
+  let stopping = false; // arrêt demandé par l'essai (sinon le jeu s'est fermé tout seul : plantage)
   let loaderSeen = false;
   const LOADER_RE = /(Loading Minecraft .* with (Fabric|Quilt) Loader|Forge Mod Loader version|MinecraftForge v|ModLauncher running|Forge mod loading|neoforge|Fabric Loader \d|FML)/i;
   const tail = [];
@@ -43,20 +44,26 @@ async function main() {
     tail.push(l); if (tail.length > 40) tail.shift();
     if (process.env.VERBOSE) console.log(l);
     if (!loaderSeen && loader !== 'vanilla' && LOADER_RE.test(l)) { loaderSeen = true; console.log(`[chargeur] ${l.slice(0, 200)}`); }
-    if (!reached && MENU_MARKERS.some((r) => r.test(l))) {
+    // Après une demande d'arrêt, « SoundSystem shutting down » ne prouve plus que le menu a été atteint.
+    if (!reached && !stopping && MENU_MARKERS.some((r) => r.test(l))) {
       reached = true;
       console.log(`[jeu] menu atteint après ${((Date.now() - tl) / 1000).toFixed(0)} s : ${l.slice(0, 160)}`);
       setTimeout(() => {
         if (process.env.DISPLAY && process.env.SHOT) {
           try { execFileSync('import', ['-window', 'root', process.env.SHOT]); console.log(`[capture] ${process.env.SHOT}`); } catch (e) { console.log('[capture] échec', e.message); }
         }
+        stopping = true;
         game.arreter();
       }, Number(process.env.SHOT_DELAY || 15000));
     }
   });
-  const timeout = setTimeout(() => { console.log('[jeu] délai dépassé'); game.arreter(); }, Number(process.env.GAME_TIMEOUT || 240000));
+  let timedOut = false;
+  const timeout = setTimeout(() => { console.log('[jeu] délai dépassé'); timedOut = true; stopping = true; game.arreter(); }, Number(process.env.GAME_TIMEOUT || 240000));
   const code = await new Promise((r) => game.on('fermeture', r));
   clearTimeout(timeout);
+  if (timedOut && reached) console.log('[jeu] menu atteint mais arrêt par délai dépassé');
+  // Le jeu doit encore tourner quand l'essai l'arrête : un plantage juste après le menu compte comme un échec.
+  if (reached && !stopping) { console.log('[jeu] fermé tout seul après le menu (plantage ?)'); reached = false; }
   if (!reached) { console.log('--- dernières lignes ---\n' + tail.join('\n')); }
   console.log(`[résultat] ${version} ${loader} : ${reached ? 'OK menu atteint' : 'ÉCHEC'} (code ${code})`);
   process.exit(reached ? 0 : 1);

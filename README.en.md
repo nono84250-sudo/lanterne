@@ -24,7 +24,7 @@ lanterne is built on three principles:
 
 ## Features
 
-- Minecraft Java from 1.8.9 up to the latest release, snapshots included.
+- Minecraft Java from 1.7.10 up to the latest release, snapshots included (Forge too from 1.7.10: Java 8, LWJGL 2 natives, old Forge installer).
 - Vanilla, Fabric, Quilt, NeoForge, Forge (before and after 1.13).
 - Automatic Java: the exact runtime Mojang asks for, downloaded from Mojang.
 - Detailed progress (MB, speed, time left), pause, resume, cancel, resume after a network drop.
@@ -109,7 +109,8 @@ French aliases `verifier()`, `reparer()` and `anonymiser()` also work.
 | `probeJava(path)` | tests a Java runtime and returns its version |
 | `offlineUuid(name)` | offline UUID for a username, computed like the game does |
 | `extractZip(file, dir)` / `readZipEntry(file, name)` | safe ZIP extractor |
-| `LaunchError`, `ERROR_MESSAGES` | errors with a precise `code` and a clear message (`err.userMessage`) |
+| `LaunchError`, `ERROR_MESSAGES`, `ERROR_MESSAGES_EN` | errors with a precise `code` and a clear message (`err.userMessage`), in French or English |
+| `setLanguage('fr')` / `setLanguage('en')`, `lang` option | language of error messages (French by default) |
 | `LOADERS`, `DEFAULT_ALLOWED_HOSTS` | supported loaders and default allowed hosts |
 
 ### Terminal commands
@@ -144,7 +145,7 @@ Requires Node.js 22 or later.
 
 - Automated tests against a local fake server: normal cases, errors, network loss, full disk,
   corrupted files, malicious ZIPs.
-- Real end-to-end runs (install then launch to the main menu) on 1.8.9, 1.12.2, 1.20.1, 1.21.x
+- Real end-to-end runs (install then launch to the main menu) on 1.7.10, 1.8.9, 1.12.2, 1.20.1, 1.21.x
   and the latest release, vanilla and with every loader.
 - Dedicated code reviews for bugs and security.
 

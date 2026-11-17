@@ -25,7 +25,7 @@ lanterne part de trois principes :
 
 ## Ce que ça fait
 
-- Minecraft Java de la 1.8.9 à la toute dernière version, snapshots compris.
+- Minecraft Java de la 1.7.10 à la toute dernière version, snapshots compris (Forge compris dès la 1.7.10 : Java 8, natives LWJGL 2, ancien installeur Forge).
 - Vanilla, Fabric, Quilt, NeoForge, Forge (avant et après 1.13).
 - Java automatique : la version exacte demandée par Mojang, téléchargée chez Mojang.
 - Progression détaillée (Mo, vitesse, temps restant), pause, reprise, annulation, reprise après coupure.
@@ -110,7 +110,8 @@ Les noms français `verifier()`, `reparer()` et `anonymiser()` marchent aussi.
 | `probeJava(chemin)` | teste un Java et donne sa version |
 | `offlineUuid(pseudo)` | UUID hors-ligne d'un pseudo, comme le jeu le calcule |
 | `extractZip(fichier, dossier)` / `readZipEntry(fichier, nom)` | extracteur ZIP sûr |
-| `LaunchError`, `ERROR_MESSAGES` | erreurs avec un `code` précis et un message clair (`err.userMessage`) |
+| `LaunchError`, `ERROR_MESSAGES`, `ERROR_MESSAGES_EN` | erreurs avec un `code` précis et un message clair (`err.userMessage`), en français ou en anglais |
+| `setLanguage('fr')` / `setLanguage('en')`, option `lang` | langue des messages d'erreur (français par défaut) |
 | `LOADERS`, `DEFAULT_ALLOWED_HOSTS` | chargeurs gérés et sites autorisés par défaut |
 
 ### Commandes du terminal
@@ -145,7 +146,7 @@ Node.js 22 ou plus est nécessaire.
 
 - Tests automatiques sur un faux serveur local : cas normaux, erreurs, coupure réseau, disque plein,
   fichiers corrompus, ZIP piégés.
-- Essais réels de bout en bout (installation puis lancement jusqu'au menu) sur 1.8.9, 1.12.2, 1.20.1, 1.21.x
+- Essais réels de bout en bout (installation puis lancement jusqu'au menu) sur 1.7.10, 1.8.9, 1.12.2, 1.20.1, 1.21.x
   et la dernière version, en vanilla et avec chaque chargeur.
 - Relectures de code dédiées aux bugs et à la sécurité.
 

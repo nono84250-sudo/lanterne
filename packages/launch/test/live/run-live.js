@@ -12,6 +12,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const MATRIX = [
+  ['1.7.10', 'vanilla'], ['1.7.10', 'forge'],
   ['1.8.9', 'vanilla'], ['1.8.9', 'forge'],
   ['1.12.2', 'vanilla'], ['1.12.2', 'forge'], ['1.12.2', 'vanilla', '--demo'],
   ['1.16.5', 'vanilla'], ['1.16.5', 'forge'], ['1.19.4', 'vanilla'], ['1.19.4', 'fabric'], ['1.20.6', 'vanilla'], ['1.20.6', 'neoforge'],
