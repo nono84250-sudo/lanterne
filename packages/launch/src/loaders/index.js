@@ -118,6 +118,18 @@ async function findInstalled(root, test, accept) {
 
 // ---------------------------------------------------------------- Fabric / Quilt
 
+/**
+ * Version du chargeur à prendre dans la liste de Fabric ou Quilt : la plus récente version stable.
+ * La liste n'est pas toujours triée (Quilt pour 26.x mettait 0.24.0 avant 0.30.2).
+ */
+function pickLoaderVersion(kind, list) {
+  const versions = (Array.isArray(list) ? list : []).map((x) => x && x.loader).filter((x) => x && typeof x.version === 'string');
+  if (!versions.length) return null;
+  const stable = versions.filter((x) => (kind === 'fabric' ? x.stable : !/[-+]/.test(x.version)));
+  if (!stable.length) return versions[0].version;
+  return stable.reduce((a, b) => (compareDotted(b.version, a.version) > 0 ? b : a)).version;
+}
+
 async function installFabricLike(kind, mc, loaderVersion, opts) {
   const meta = kind === 'fabric' ? FABRIC_META : QUILT_META;
   const prefix = kind === 'fabric' ? 'fabric-loader-' : 'quilt-loader-';
@@ -132,11 +144,9 @@ async function installFabricLike(kind, mc, loaderVersion, opts) {
     if (!lv) {
       const list = await getJson(`${meta}/versions/loader/${encodeURIComponent(mc)}`, opts.net);
       if (!Array.isArray(list) || list.length === 0) throw new LaunchError('LOADER_NOT_FOUND', `${kind} pour ${mc}`);
-      const versions = list.map((x) => x && x.loader).filter(Boolean);
-      const pick = kind === 'fabric'
-        ? (versions.find((x) => x.stable) || versions[0])
-        : (versions.find((x) => !/[-+]/.test(x.version)) || versions[0]);
-      lv = checkLoaderVersion(pick.version);
+      const pick = pickLoaderVersion(kind, list);
+      if (!pick) throw new LaunchError('LOADER_NOT_FOUND', `${kind} pour ${mc}`);
+      lv = checkLoaderVersion(pick);
     }
     let profile;
     try {
@@ -437,4 +447,4 @@ async function ensureLoader({ loader, mcVersion, loaderVersion, ...opts }) {
   return installForgeLike(kind, mcVersion, lv, opts);
 }
 
-module.exports = { LOADERS, ensureLoader, normalizeLoader, fixRepoUrl, neoforgePrefix, completeLibrary, mavenVersions };
+module.exports = { LOADERS, ensureLoader, normalizeLoader, fixRepoUrl, neoforgePrefix, completeLibrary, mavenVersions, pickLoaderVersion };

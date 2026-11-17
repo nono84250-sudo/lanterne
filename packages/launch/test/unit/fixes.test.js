@@ -320,3 +320,16 @@ test('liste blanche : valeurs piégées refusées (classpath, module-path, chemi
   for (const bad of ['evil', '/tmp/', 'attacker', 'passwd', '..']) assert.ok(!j.includes(bad), bad);
   assert.ok(r.args.includes('ALL-MODULE-PATH'));
 });
+
+test('Fabric / Quilt : la plus récente version stable, même si la liste n\'est pas triée', () => {
+  const { pickLoaderVersion } = require('../../src/loaders');
+  const L = (v, stable) => ({ loader: { version: v, stable } });
+  // Ordre réel renvoyé par Quilt pour 26.3 : 0.24.0 avant 0.30.2, bêtas en tête.
+  assert.equal(pickLoaderVersion('quilt', [L('0.20.0-beta.9'), L('0.24.0'), L('0.23.1'), L('0.31.0-beta.6'), L('0.30.2'), L('0.30.10'), L('0.19.5')]), '0.30.10');
+  assert.equal(pickLoaderVersion('quilt', [L('0.31.0-beta.6'), L('0.31.0+local')]), '0.31.0-beta.6');
+  assert.equal(pickLoaderVersion('fabric', [L('0.17.0', false), L('0.16.14', true), L('0.16.9', true)]), '0.16.14');
+  assert.equal(pickLoaderVersion('fabric', [L('0.17.0', false)]), '0.17.0');
+  assert.equal(pickLoaderVersion('fabric', [L('0.16.9', true), L('0.16.14', true), L('0.17.0', false)]), '0.16.14');
+  assert.equal(pickLoaderVersion('quilt', []), null);
+  assert.equal(pickLoaderVersion('quilt', [null, { loader: {} }, 'x']), null);
+});
