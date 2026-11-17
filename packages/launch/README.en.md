@@ -55,7 +55,20 @@ Other options: `memory`, `quickPlay`, `resolution`, `jvmArgs` (replaces Mojang's
 
 ## Errors
 
-All errors are `LaunchError` with a stable `code` and a French end-user message (`err.userMessage`).
+All errors are `LaunchError` with a stable `code` and a clear end-user message (`err.userMessage`), in French
+(default) or English. The codes are identical in both languages.
+
+```js
+const { prepare, setLanguage } = require('lanterne-launch');
+await prepare({ version: '1.20.1', root, lang: 'en' }); // install() and launch() reuse the plan's language
+setLanguage('en');                                       // or: default language for the whole engine
+err.setLanguage('fr');                                   // or: translate an error you already received
+err.userMessages;                                        // { fr: '…', en: '…' }
+```
+
+`readZipEntry`, `buildArgs` and `probeJava` do not read the `lang` option: they only follow `setLanguage()`.
+`err.detail` is a short technical note (often in French), meant for logs only. Messages per code:
+`ERROR_MESSAGES` (French), `ERROR_MESSAGES_EN` (English), `ERROR_MESSAGES_BY_LANG`.
 
 ## Tests
 

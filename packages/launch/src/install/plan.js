@@ -6,7 +6,7 @@
  */
 
 const path = require('node:path');
-const { LaunchError } = require('../errors');
+const { LaunchError, normalizeLang } = require('../errors');
 const { rulesAllow, currentPlatform } = require('../manifest/rules');
 const { parseMaven, safeRelPath } = require('../manifest/maven');
 const { layout, getVersionManifest, resolveAlias, resolveVersion, readJsonFile, checkId, isNetworkError } = require('../manifest/versions');
@@ -103,6 +103,7 @@ async function loadAssetIndex(version, L, opts) {
  * @param {boolean} [opts.offline]   ne jamais aller sur Internet
  * @param {'auto'|string} [opts.java] 'auto' (défaut) ou chemin d'un Java
  * @param {string[]} [opts.allowedHosts]
+ * @param {'fr'|'en'} [opts.lang]     langue de err.userMessage (défaut : 'fr', voir setLanguage)
  */
 async function prepare(opts = {}) {
   const root = opts.root || opts.dossier;
@@ -244,6 +245,8 @@ async function prepare(opts = {}) {
     gameDir: path.resolve(opts.gameDir || opts.dossierInstance || L.root),
     offline: ctx.offline,
     allowedHosts: opts.allowedHosts,
+    // Langue des messages d'erreur (option lang : 'fr' | 'en'), reprise par install() et launch().
+    ...(normalizeLang(opts.lang) ? { lang: normalizeLang(opts.lang) } : {}),
     version,
     clientJar,
     copyJar,

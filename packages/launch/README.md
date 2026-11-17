@@ -68,7 +68,20 @@ Autres options : `memory: { min, max }` (Mo), `quickPlay: { singleplayer | multi
 
 ## Erreurs
 
-Toutes les erreurs sont des `LaunchError` avec un `code` précis et un message clair en français (`err.userMessage`) :
+Toutes les erreurs sont des `LaunchError` avec un `code` précis et un message clair pour le joueur (`err.userMessage`),
+en français (par défaut) ou en anglais. Les codes sont les mêmes dans les deux langues.
+
+```js
+const { prepare, setLanguage } = require('lanterne-launch');
+await prepare({ version: '1.20.1', root, lang: 'en' }); // install() et launch() reprennent la langue du plan
+setLanguage('en');                                       // ou : langue par défaut pour tout le moteur
+err.setLanguage('fr');                                   // ou : traduire une erreur déjà reçue
+err.userMessages;                                        // { fr: '…', en: '…' }
+```
+
+`readZipEntry`, `buildArgs` et `probeJava` ne lisent pas l'option `lang` : ils suivent seulement `setLanguage()`.
+`err.detail` reste une courte précision technique (souvent en français), à afficher seulement dans les journaux.
+Codes :
 `NETWORK`, `OFFLINE`, `TIMEOUT`, `DISK_FULL`, `PERMISSION`, `INTEGRITY`, `INSECURE_URL`, `HOST_NOT_ALLOWED`,
 `ZIP_UNSAFE`, `ZIP_TOO_LARGE`, `VERSION_NOT_FOUND`, `LOADER_NOT_FOUND`, `JAVA_MISSING`, `JAVA_UNSUPPORTED`,
 `JAVA_TOO_OLD`, `LOADER_INSTALL_FAILED`, `NOT_INSTALLED`, `LAUNCH_FAILED`, `GAME_CRASHED` (événement `erreur` si le jeu plante), `CANCELLED`, `INTERNAL`…

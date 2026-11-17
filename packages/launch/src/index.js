@@ -12,7 +12,7 @@
  *   jeu.on('journal', console.log); jeu.on('fermeture', (code) => …); jeu.arreter();
  */
 
-const { LaunchError, MESSAGES, wrap } = require('./errors');
+const { LaunchError, MESSAGES, MESSAGES_EN, MESSAGES_BY_LANG, LANGS, setLanguage, getLanguage, userMessageFor, wrap } = require('./errors');
 const { createControl } = require('./net/control');
 const { DEFAULT_ALLOWED_HOSTS } = require('./net/http');
 const { prepare } = require('./install/plan');
@@ -68,7 +68,15 @@ module.exports = {
   offlineUuid,
   probeJava,
   LaunchError,
+  /** Messages pour le joueur, en français (historique) ; les deux langues dans ERROR_MESSAGES_BY_LANG. */
   ERROR_MESSAGES: MESSAGES,
+  ERROR_MESSAGES_EN: MESSAGES_EN,
+  ERROR_MESSAGES_BY_LANG: MESSAGES_BY_LANG,
+  LANGUAGES: LANGS,
+  /** Langue par défaut des erreurs : setLanguage('en') ou setLanguage('fr'). */
+  setLanguage,
+  getLanguage,
+  userMessageFor,
   LOADERS,
   DEFAULT_ALLOWED_HOSTS,
 };

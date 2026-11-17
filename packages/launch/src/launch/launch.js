@@ -7,7 +7,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { StringDecoder } = require('node:string_decoder');
 const { EventEmitter } = require('node:events');
-const { LaunchError, fromSystemError } = require('../errors');
+const { LaunchError, fromSystemError, isUnset } = require('../errors');
 const { buildArgs, maskSecrets } = require('./args');
 const { prepare } = require('../install/plan');
 const { extractNatives } = require('../install/install');
@@ -278,6 +278,8 @@ async function launch(opts = {}) {
   if (!plan) plan = await prepare(opts);
   // Dossier d'instance donné au lancement : il remplace celui du plan.
   if (opts.plan && (opts.gameDir || opts.dossierInstance)) plan = { ...plan, gameDir: path.resolve(String(opts.gameDir || opts.dossierInstance)) };
+  // Langue des erreurs envoyées plus tard par l'événement « erreur » (option lang, sinon celle du plan).
+  const lang = isUnset(opts.lang) ? plan.lang : opts.lang;
   const javaExe = await checkReady(plan, opts);
   if (javaExe !== plan.java.executable) plan = { ...plan, java: { ...plan.java, executable: javaExe } };
   await extractNatives(plan);
@@ -319,7 +321,7 @@ async function launch(opts = {}) {
       resolve(game);
     });
     child.on('error', (err) => {
-      const e = new LaunchError(err.code === 'ENOENT' ? 'JAVA_MISSING' : 'LAUNCH_FAILED', err.code, { cause: cleanCause(err) });
+      const e = new LaunchError(err.code === 'ENOENT' ? 'JAVA_MISSING' : 'LAUNCH_FAILED', err.code, { cause: cleanCause(err), lang });
       if (!spawned) return reject(e);
       game.emit('erreur', e);
     });
@@ -330,7 +332,7 @@ async function launch(opts = {}) {
       game._log(`Fin du jeu (code ${code}${signal ? ', ' + signal : ''})`, { source: 'lanceur', flux: 'stdout' });
       // Plantage (et pas un arrêt demandé) : erreur claire pour le launcher.
       if (!game.stopRequested && code !== 0 && code !== null && game.listenerCount('erreur') > 0) {
-        game.emit('erreur', new LaunchError('GAME_CRASHED', `code ${code}`));
+        game.emit('erreur', new LaunchError('GAME_CRASHED', `code ${code}`, { lang }));
       }
       game.emit('fermeture', code, signal);
       game.emit('exit', code, signal);

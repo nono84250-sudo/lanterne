@@ -146,3 +146,20 @@ test('arrêter() termine le jeu', async () => {
   assert.equal(game.exited, true);
   await fsp.rm(root, { recursive: true, force: true });
 });
+
+test('erreurs envoyées par le jeu (événement erreur) dans la langue du plan ou de launch()', async () => {
+  const root = await tmpDir();
+  const v = { id: 'faux', type: 'release', mainClass: 'Main', arguments: { jvm: [], game: [] } };
+  const EN = 'The game stopped because of an error (see the log).';
+  const FR = "Le jeu s'est arrêté à cause d'une erreur (voir le journal).";
+  for (const [planLang, optLang, expected] of [['en', undefined, EN], ['en', 'fr', FR], [undefined, 'en', EN], [undefined, undefined, FR]]) {
+    const plan = { ...fakePlan(root, v, { libraries: [], logging: null }), ...(planLang ? { lang: planLang } : {}) };
+    const game = await launch({ plan, account: MSA, lang: optLang, jvmArgs: ['-e', 'setTimeout(()=>process.exit(4),30)'] });
+    const crash = new Promise((r) => game.on('erreur', r));
+    await new Promise((r) => game.on('fermeture', r));
+    const e = await crash;
+    assert.equal(e.code, 'GAME_CRASHED');
+    assert.equal(e.userMessage, expected);
+  }
+  await fsp.rm(root, { recursive: true, force: true });
+});
