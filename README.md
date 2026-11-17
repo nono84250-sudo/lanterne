@@ -156,6 +156,11 @@ Pour une faille de sécurité, merci de suivre [SECURITY.md](packages/launch/SEC
 
 ## Licence
 
-[MIT](LICENSE). Aucun fichier de Minecraft n'est inclus : tout est téléchargé chez le joueur, depuis les serveurs officiels.
+[GNU GPL v3](LICENSE) (GPL-3.0-only). Copyright (C) 2026 les auteurs de lanterne.
+Vous pouvez utiliser, modifier et redistribuer ce code. Si vous le redistribuez (modifié ou non), ou si vous
+distribuez un programme qui l'intègre, l'ensemble doit rester sous GPL v3 (version 3 uniquement), avec le texte
+de la licence et le code source. Fourni sans aucune garantie.
+
+Aucun fichier de Minecraft n'est inclus : tout est téléchargé chez le joueur, depuis les serveurs officiels.
 
 Projet indépendant, non affilié à Mojang ni Microsoft. « Minecraft » est une marque de Mojang AB.

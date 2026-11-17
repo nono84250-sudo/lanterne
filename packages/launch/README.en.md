@@ -4,7 +4,7 @@ Engine that **downloads, installs and launches Minecraft Java Edition**: vanilla
 (legacy and modern). Zero dependencies: Node.js 22+ only.
 
 > Independent project, not affiliated with Mojang or Microsoft. No Minecraft files are bundled: everything is
-> downloaded on the player's machine from official servers. **No support is guaranteed**: provided as is (MIT).
+> downloaded on the player's machine from official servers. **No support is guaranteed**: provided as is, without warranty (GNU GPL v3).
 
 [Version française](README.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
@@ -66,4 +66,4 @@ npm run test:live     # real end-to-end matrix (long, downloads several GB)
 
 ## License
 
-MIT. "Minecraft" is a trademark of Mojang AB; this project is not endorsed by or associated with Mojang or Microsoft.
+[GNU GPL v3](LICENSE) (GPL-3.0-only). "Minecraft" is a trademark of Mojang AB; this project is not endorsed by or associated with Mojang or Microsoft.

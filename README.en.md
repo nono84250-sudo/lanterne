@@ -155,6 +155,11 @@ For a security issue, please follow [SECURITY.md](packages/launch/SECURITY.md) (
 
 ## License
 
-[MIT](LICENSE). No Minecraft files are bundled: everything is downloaded on the player's machine from official servers.
+[GNU GPL v3](LICENSE) (GPL-3.0-only). Copyright (C) 2026 the lanterne authors.
+You may use, modify and redistribute this code. If you redistribute it (modified or not), or distribute a program
+that includes it, the whole must stay under the GPL v3 (version 3 only), with the licence text and the source code.
+Provided without any warranty.
+
+No Minecraft files are bundled: everything is downloaded on the player's machine from official servers.
 
 Independent project, not affiliated with Mojang or Microsoft. "Minecraft" is a trademark of Mojang AB.

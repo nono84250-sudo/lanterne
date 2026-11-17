@@ -1,7 +1,7 @@
 {
   "name": "lanterne",
   "private": true,
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "workspaces": [
     "packages/*"
   ],

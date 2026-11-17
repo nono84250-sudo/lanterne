@@ -5,7 +5,7 @@ Zéro dépendance : uniquement ce que Node.js (22 ou plus) fournit.
 
 > Projet indépendant, non affilié à Mojang ni Microsoft. Aucun fichier de Minecraft n'est inclus :
 > tout est téléchargé chez le joueur, depuis les serveurs officiels.
-> **Aucun support garanti** : fourni tel quel (licence MIT).
+> **Aucun support garanti** : fourni tel quel, sans garantie (licence GNU GPL v3).
 
 [English version](README.en.md) · [Sécurité](SECURITY.md) · [Historique](CHANGELOG.md)
 
@@ -97,4 +97,4 @@ node test/live/compare-mclc.js           # commande équivalente à minecraft-la
 
 ## Licence
 
-MIT. « Minecraft » est une marque de Mojang AB ; ce projet n'est ni approuvé ni associé à Mojang ou Microsoft.
+[GNU GPL v3](LICENSE) (GPL-3.0-only). « Minecraft » est une marque de Mojang AB ; ce projet n'est ni approuvé ni associé à Mojang ou Microsoft.

@@ -26,5 +26,5 @@ Pas de ticket public : suivez [SECURITY.md](packages/launch/SECURITY.md). / No p
    - aucun fichier de Minecraft ni de mod dans le dépôt / no Minecraft or mod files in the repository;
    - le jeton du joueur ne doit jamais apparaître dans un journal / the player's token must never be logged.
 
-En contribuant, vous acceptez que votre code soit publié sous [licence MIT](LICENSE).
-By contributing, you agree that your code is released under the [MIT licence](LICENSE).
+En contribuant, vous acceptez que votre code soit publié sous [licence GNU GPL v3](LICENSE) (GPL-3.0-only).
+By contributing, you agree that your code is released under the [GNU GPL v3 licence](LICENSE) (GPL-3.0-only).
